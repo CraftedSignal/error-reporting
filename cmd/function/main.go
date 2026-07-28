@@ -31,7 +31,7 @@ func init() {
 	keyStore = ks
 
 	deduper = internal.NewDeduper(5 * time.Minute)
-	notifier = internal.NewSlackNotifier(os.Getenv("SLACK_WEBHOOK_URL"))
+	notifier = internal.NewSlackNotifier(os.Getenv("SLACK_WEBHOOK_URL"), os.Getenv("SLACK_CHANNEL"))
 
 	functions.HTTP("Ingest", ingestHandler)
 }

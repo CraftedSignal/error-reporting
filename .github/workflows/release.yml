@@ -45,7 +45,15 @@ jobs:
         if: failure() && env.SLACK_WEBHOOK_URL != ''
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_CHANNEL: ${{ vars.SLACK_CHANNEL }}
         run: |
-          curl -fsSL -X POST -H 'Content-Type: application/json' \
-            --data "{\"text\":\"❌ error-reporting release failed for ${{ github.ref_name }}: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
-            "$SLACK_WEBHOOK_URL"
+          MSG="❌ error-reporting release failed for ${{ github.ref_name }}: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [[ "$SLACK_WEBHOOK_URL" == xoxb-* ]]; then
+            curl -fsSL -X POST -H 'Content-Type: application/json' -H "Authorization: Bearer $SLACK_WEBHOOK_URL" \
+              --data "{\"channel\":\"$SLACK_CHANNEL\",\"text\":\"$MSG\"}" \
+              https://slack.com/api/chat.postMessage
+          else
+            curl -fsSL -X POST -H 'Content-Type: application/json' \
+              --data "{\"text\":\"$MSG\"}" \
+              "$SLACK_WEBHOOK_URL"
+          fi

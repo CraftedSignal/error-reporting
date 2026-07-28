@@ -10,24 +10,36 @@ import (
 	"time"
 )
 
-// SlackNotifier sends formatted messages to a Slack incoming webhook.
+// SlackNotifier sends formatted messages to a Slack incoming webhook or to the
+// Slack Web API when configured with a bot token (xoxb-...).
 type SlackNotifier struct {
 	webhookURL string
+	channel    string
 	client     *http.Client
 }
 
-// NewSlackNotifier creates a notifier for the given webhook URL.
-func NewSlackNotifier(webhookURL string) *SlackNotifier {
+// NewSlackNotifier creates a notifier for the given webhook URL or bot token.
+// When webhookURL starts with "xoxb-" it is treated as a bot token and channel
+// must be a channel id or name (e.g. #alerts).
+func NewSlackNotifier(webhookURL, channel string) *SlackNotifier {
 	return &SlackNotifier{
 		webhookURL: webhookURL,
+		channel:    channel,
 		client:     &http.Client{Timeout: 10 * time.Second},
 	}
+}
+
+func (n *SlackNotifier) isBotToken() bool {
+	return strings.HasPrefix(n.webhookURL, "xoxb-")
 }
 
 // Notify sends a Slack message for the report.
 func (n *SlackNotifier) Notify(ctx context.Context, r ReportPayload) error {
 	if n.webhookURL == "" {
 		return fmt.Errorf("slack webhook not configured")
+	}
+	if n.isBotToken() && n.channel == "" {
+		return fmt.Errorf("slack channel not configured for bot token")
 	}
 
 	companyID := "unknown"
@@ -59,28 +71,56 @@ func (n *SlackNotifier) Notify(ctx context.Context, r ReportPayload) error {
 		"mrkdwn_in": []string{"text", "fields"},
 	}
 
-	payload := map[string]interface{}{
-		"attachments": []map[string]interface{}{attachment},
-	}
+	var (
+		url  = n.webhookURL
+		body []byte
+		err  error
+	)
 
-	body, err := json.Marshal(payload)
+	if n.isBotToken() {
+		url = "https://slack.com/api/chat.postMessage"
+		msg := map[string]interface{}{
+			"channel":     n.channel,
+			"attachments": []map[string]interface{}{attachment},
+		}
+		body, err = json.Marshal(msg)
+	} else {
+		body, err = json.Marshal(map[string]interface{}{
+			"attachments": []map[string]interface{}{attachment},
+		})
+	}
 	if err != nil {
 		return fmt.Errorf("marshal slack payload: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.webhookURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if n.isBotToken() {
+		req.Header.Set("Authorization", "Bearer "+n.webhookURL)
+	}
 
 	resp, err := n.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("slack webhook request failed: %w", err)
+		return fmt.Errorf("slack request failed: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("slack webhook returned %d", resp.StatusCode)
+		return fmt.Errorf("slack returned %d", resp.StatusCode)
+	}
+	if n.isBotToken() {
+		var apiResp struct {
+			OK    bool   `json:"ok"`
+			Error string `json:"error"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+			return fmt.Errorf("decode slack response: %w", err)
+		}
+		if !apiResp.OK {
+			return fmt.Errorf("slack api error: %s", apiResp.Error)
+		}
 	}
 	return nil
 }
