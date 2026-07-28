@@ -1,4 +1,4 @@
-package function
+package main
 
 import (
 	"fmt"
@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/GoogleCloudPlatform/functions-framework-go/functions"
+	"github.com/GoogleCloudPlatform/functions-framework-go/funcframework"
 	"github.com/craftedsignal/error-reporting/internal"
 )
 
@@ -34,6 +35,17 @@ func init() {
 	notifier = internal.NewSlackNotifier(os.Getenv("SLACK_WEBHOOK_URL"), os.Getenv("SLACK_CHANNEL"))
 
 	functions.HTTP("Ingest", ingestHandler)
+}
+
+func main() {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	if err := funcframework.Start(port); err != nil {
+		slog.Default().Error("framework exited", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
 }
 
 func ingestHandler(w http.ResponseWriter, r *http.Request) {

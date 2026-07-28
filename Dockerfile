@@ -20,7 +20,6 @@ COPY . .
 # Build a statically-linked binary.
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-s -w -extldflags=-static" \
-    -a -installsuffix cgo \
     -o /bin/function \
     ./cmd/function
 
