@@ -2,7 +2,7 @@
 
 # Hardened container image for the error-reporting Cloud Function.
 # Builds a statically-linked Go binary and runs it as a non-root user in a
-# minimal distroless base image.
+# scratch base image (minimal attack surface, no shell/package manager).
 
 FROM golang:1.26.5-alpine AS builder
 
@@ -24,17 +24,29 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -o /bin/function \
     ./cmd/function
 
-# --- Runtime image ---
-FROM gcr.io/distroless/static-debian12:nonroot
+# Prep stage: gather CA certs and a minimal passwd/group for scratch.
+FROM alpine:3.23 AS prep
 
-# Copy CA certificates for HTTPS calls to Slack.
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+RUN apk add --no-cache ca-certificates && \
+    mkdir -p /scratch/etc/ssl/certs && \
+    cp /etc/ssl/certs/ca-certificates.crt /scratch/etc/ssl/certs/ && \
+    echo "function:x:1000:1000::/app:/sbin/nologin" > /scratch/etc/passwd && \
+    echo "function:x:1000:" > /scratch/etc/group
+
+# --- Runtime image ---
+FROM scratch
+
+LABEL org.opencontainers.image.source="https://github.com/CraftedSignal/error-reporting"
+
+COPY --from=prep /scratch/etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=prep /scratch/etc/passwd /etc/passwd
+COPY --from=prep /scratch/etc/group /etc/group
 
 # Copy the binary.
-COPY --from=builder /bin/function /function
+COPY --from=builder --chmod=755 /bin/function /function
 
-# Run as non-root (distroless nonroot image uses UID 65532).
-USER nonroot:nonroot
+# Run as non-root.
+USER 1000:1000
 
 EXPOSE 8080
 
