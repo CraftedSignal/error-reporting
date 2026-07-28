@@ -40,3 +40,12 @@ jobs:
             ${{ vars.ARTIFACT_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/error-reporting/function:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Notify Slack on failure
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -fsSL -X POST -H 'Content-Type: application/json' \
+            --data "{\"text\":\"❌ error-reporting release failed for ${{ github.ref_name }}: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
+            "$SLACK_WEBHOOK_URL"
