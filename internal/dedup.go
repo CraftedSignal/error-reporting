@@ -8,9 +8,9 @@ import (
 
 // Deduper suppresses duplicate notifications within a TTL.
 type Deduper struct {
-	mu     sync.Mutex
-	ttl    time.Duration
-	seen   map[string]time.Time
+	mu   sync.Mutex
+	ttl  time.Duration
+	seen map[string]time.Time
 }
 
 // NewDeduper creates a deduplication cache with the given TTL.

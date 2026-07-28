@@ -1,0 +1,5 @@
+# Default owners for everything in the repo
+* @hazcod
+
+# CI/CD changes
+.github/** @hazcod

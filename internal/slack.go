@@ -50,13 +50,13 @@ func (n *SlackNotifier) Notify(ctx context.Context, r ReportPayload) error {
 	}
 
 	attachment := map[string]interface{}{
-		"color":      color,
-		"title":      fmt.Sprintf("[%s] %s", strings.ToUpper(r.Trigger.Level), r.Trigger.Message),
-		"fallback":   fmt.Sprintf("%s: %s", r.Trigger.Level, r.Trigger.Message),
-		"fields":     slackFields(r, companyID, correlationID, userID),
-		"footer":     fmt.Sprintf("CraftedSignal %s (%s)", r.Build.Version, r.Build.Commit),
-		"ts":         time.Now().Unix(),
-		"mrkdwn_in":  []string{"text", "fields"},
+		"color":     color,
+		"title":     fmt.Sprintf("[%s] %s", strings.ToUpper(r.Trigger.Level), r.Trigger.Message),
+		"fallback":  fmt.Sprintf("%s: %s", r.Trigger.Level, r.Trigger.Message),
+		"fields":    slackFields(r, companyID, correlationID, userID),
+		"footer":    fmt.Sprintf("CraftedSignal %s (%s)", r.Build.Version, r.Build.Commit),
+		"ts":        time.Now().Unix(),
+		"mrkdwn_in": []string{"text", "fields"},
 	}
 
 	payload := map[string]interface{}{
