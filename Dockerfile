@@ -4,7 +4,7 @@
 # Builds a statically-linked Go binary and runs it as a non-root user in a
 # minimal distroless base image.
 
-FROM golang:1.23-alpine AS builder
+FROM golang:1.26.5-alpine AS builder
 
 # Install git and ca-certificates for module downloads.
 RUN apk add --no-cache git ca-certificates
