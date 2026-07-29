@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type ServiceRepoConfig struct {
@@ -35,6 +36,9 @@ type ResolverConfig struct {
 	MaxEdits         int
 	DryRun           bool
 	NotifyNonPR      bool
+	IncidentBucket   string
+	IncidentPrefix   string
+	IncidentTTL      time.Duration
 }
 
 func LoadResolverConfigFromEnv() (ResolverConfig, error) {
@@ -65,6 +69,9 @@ func LoadResolverConfigFromEnv() (ResolverConfig, error) {
 		MaxEdits:         envInt("MAX_EDITS", 8),
 		DryRun:           envBool("DRY_RUN", false),
 		NotifyNonPR:      envBool("NOTIFY_NON_PR", true),
+		IncidentBucket:   os.Getenv("INCIDENT_STORE_BUCKET"),
+		IncidentPrefix:   envOrDefault("INCIDENT_STORE_PREFIX", "resolver-incidents"),
+		IncidentTTL:      envDuration("INCIDENT_SUPPRESSION_TTL", 7*24*time.Hour),
 	}
 	if cfg.Environment == "" {
 		cfg.Environment = "prod"
@@ -210,4 +217,16 @@ func envBool(key string, fallback bool) bool {
 	default:
 		return fallback
 	}
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
 }

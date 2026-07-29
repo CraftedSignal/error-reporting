@@ -15,6 +15,7 @@ type Resolver struct {
 	github   *GitHubClient
 	logs     *CloudLoggingClient
 	notifier *SlackNotifier
+	store    IncidentStore
 }
 
 type ResolutionNotification struct {
@@ -36,6 +37,10 @@ func NewResolver(cfg ResolverConfig, logger *slog.Logger) *Resolver {
 		logger = slog.Default()
 	}
 	tokens := NewMetadataAccessTokenSource()
+	var store IncidentStore
+	if cfg.IncidentBucket != "" {
+		store = NewGCSIncidentStore(cfg.IncidentBucket, cfg.IncidentPrefix, cfg.IncidentTTL, tokens)
+	}
 	return &Resolver{
 		cfg:      cfg,
 		logger:   logger,
@@ -43,6 +48,7 @@ func NewResolver(cfg ResolverConfig, logger *slog.Logger) *Resolver {
 		github:   NewGitHubClient(cfg.GitHubToken, cfg.GitHubAPIBaseURL),
 		logs:     NewCloudLoggingClient(cfg.ProjectID, tokens),
 		notifier: NewSlackNotifier(cfg.SlackWebhookURL, cfg.SlackChannel),
+		store:    store,
 	}
 }
 
@@ -58,13 +64,32 @@ func (r *Resolver) HandleIncident(ctx context.Context, incident IncidentEnvelope
 	}
 
 	serviceKey, repoCfg, ok := ResolveServiceRepo(r.cfg.ServiceRepos, incident.Service)
+	if serviceKey != "" {
+		incident.Service = serviceKey
+	}
+	if r.store != nil {
+		claim, err := r.store.Claim(ctx, incident)
+		if err != nil {
+			return fmt.Errorf("claim incident: %w", err)
+		}
+		if !claim.New {
+			r.logger.Info("duplicate incident suppressed",
+				slog.String("service", incident.Service),
+				slog.String("fingerprint", incident.Fingerprint),
+				slog.Int("count", claim.Record.Count))
+			return nil
+		}
+	}
 	if !ok || repoCfg.Repo == "" {
 		plan := HeuristicPlan(incident)
 		plan.Action = "needs_human"
 		plan.Summary = "No repository route is configured for this service."
-		return r.notify(ctx, incident, repoCfg, plan, "", "needs human: repository route missing")
+		if !r.cfg.NotifyNonPR {
+			r.recordOutcome(ctx, incident, plan, "", "needs human: repository route missing")
+			return nil
+		}
+		return r.finish(ctx, incident, repoCfg, plan, "", "needs human: repository route missing", true)
 	}
-	incident.Service = serviceKey
 	if repoCfg.Mention == "" {
 		repoCfg.Mention = r.cfg.SlackMention
 	}
@@ -82,13 +107,13 @@ func (r *Resolver) HandleIncident(ctx context.Context, incident IncidentEnvelope
 	switch plan.Action {
 	case "open_pr":
 		if r.cfg.DryRun {
-			return r.notify(ctx, incident, repoCfg, plan, "", "dry run: PR not opened")
+			return r.finish(ctx, incident, repoCfg, plan, "", "dry run: PR not opened", true)
 		}
 		if r.cfg.GitHubToken == "" {
-			return r.notify(ctx, incident, repoCfg, plan, "", "needs human: GitHub token not configured")
+			return r.finish(ctx, incident, repoCfg, plan, "", "needs human: GitHub token not configured", true)
 		}
 		if len(plan.FileEdits) == 0 {
-			return r.notify(ctx, incident, repoCfg, plan, "", "needs human: AI requested PR without edits")
+			return r.finish(ctx, incident, repoCfg, plan, "", "needs human: AI requested PR without edits", true)
 		}
 
 		pr, err := r.github.OpenPullRequestWithEdits(ctx, repoCfg.Repo, repoCfg, incident, plan, r.cfg.MaxEdits)
@@ -98,7 +123,7 @@ func (r *Resolver) HandleIncident(ctx context.Context, incident IncidentEnvelope
 				slog.String("service", incident.Service),
 				slog.String("fingerprint", incident.Fingerprint),
 				slog.String("error", err.Error()))
-			notifyErr := r.notify(ctx, incident, repoCfg, plan, "", status+": "+err.Error())
+			notifyErr := r.finish(ctx, incident, repoCfg, plan, "", status+": "+err.Error(), true)
 			if isTransientResolverError(err) {
 				if notifyErr != nil {
 					return fmt.Errorf("%w; slack: %v", err, notifyErr)
@@ -111,16 +136,22 @@ func (r *Resolver) HandleIncident(ctx context.Context, incident IncidentEnvelope
 		if pr.Reused {
 			status = "existing PR reused"
 		}
+		r.recordOutcome(ctx, incident, plan, pr.URL, status)
 		n := resolutionNotification(incident, repoCfg, plan, pr.URL, status)
 		n.DeployedSource = deployed
 		return r.notifier.NotifyResolution(ctx, n)
 	case "no_pr":
 		if !r.cfg.NotifyNonPR {
+			r.recordOutcome(ctx, incident, plan, "", "investigated: no PR opened")
 			return nil
 		}
-		return r.notify(ctx, incident, repoCfg, plan, "", "investigated: no PR opened")
+		return r.finish(ctx, incident, repoCfg, plan, "", "investigated: no PR opened", true)
 	default:
-		return r.notify(ctx, incident, repoCfg, plan, "", "needs human review")
+		if !r.cfg.NotifyNonPR {
+			r.recordOutcome(ctx, incident, plan, "", "needs human review")
+			return nil
+		}
+		return r.finish(ctx, incident, repoCfg, plan, "", "needs human review", true)
 	}
 }
 
@@ -184,6 +215,33 @@ func (r *Resolver) notify(ctx context.Context, incident IncidentEnvelope, repoCf
 	n := resolutionNotification(incident, repoCfg, plan, prURL, status)
 	n.DeployedSource = deployedSource(repoCfg.Repo, incident.Report.Build.Commit, "")
 	return r.notifier.NotifyResolution(ctx, n)
+}
+
+func (r *Resolver) finish(ctx context.Context, incident IncidentEnvelope, repoCfg ServiceRepoConfig, plan ResolutionPlan, prURL, status string, notify bool) error {
+	r.recordOutcome(ctx, incident, plan, prURL, status)
+	if !notify {
+		return nil
+	}
+	return r.notify(ctx, incident, repoCfg, plan, prURL, status)
+}
+
+func (r *Resolver) recordOutcome(ctx context.Context, incident IncidentEnvelope, plan ResolutionPlan, prURL, status string) {
+	if r.store == nil {
+		return
+	}
+	updateCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := r.store.Update(updateCtx, incident, IncidentRecordUpdate{
+		Status:   status,
+		Action:   plan.Action,
+		Category: plan.Category,
+		PRURL:    prURL,
+	}); err != nil {
+		r.logger.Warn("failed to update incident record",
+			slog.String("service", incident.Service),
+			slog.String("fingerprint", incident.Fingerprint),
+			slog.String("error", err.Error()))
+	}
 }
 
 func resolutionNotification(incident IncidentEnvelope, repoCfg ServiceRepoConfig, plan ResolutionPlan, prURL, status string) ResolutionNotification {
