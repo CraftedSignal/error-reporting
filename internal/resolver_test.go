@@ -43,13 +43,15 @@ func TestResolverSuppressesNeedsHumanNotificationsWhenNotifyNonPRDisabled(t *tes
 	cfg := ResolverConfig{
 		Environment:     "prod",
 		SlackWebhookURL: server.URL,
-		ServiceRepos:    DefaultServiceRepos(),
-		NotifyNonPR:     false,
+		ServiceRepos: map[string]ServiceRepoConfig{
+			"application": {Repo: "Example/application", BaseBranch: "main"},
+		},
+		NotifyNonPR: false,
 	}
 	resolver := NewResolver(cfg, nil)
 	incident := IncidentEnvelope{
 		Environment: "prod",
-		Service:     "platform",
+		Service:     "application",
 		Report: ReportPayload{
 			FormatVersion: "1",
 			TriggeredAt:   time.Now().UTC(),
@@ -92,8 +94,10 @@ func TestResolverSuppressesDuplicateIncidentBeforeAnalysisAndSlack(t *testing.T)
 	cfg := ResolverConfig{
 		Environment:     "prod",
 		SlackWebhookURL: server.URL,
-		ServiceRepos:    DefaultServiceRepos(),
-		NotifyNonPR:     true,
+		ServiceRepos: map[string]ServiceRepoConfig{
+			"application": {Repo: "Example/application", BaseBranch: "main"},
+		},
+		NotifyNonPR: true,
 	}
 	resolver := NewResolver(cfg, nil)
 	resolver.store = store
@@ -101,7 +105,7 @@ func TestResolverSuppressesDuplicateIncidentBeforeAnalysisAndSlack(t *testing.T)
 
 	incident := IncidentEnvelope{
 		Environment: "prod",
-		Service:     "platform",
+		Service:     "application",
 		Fingerprint: "abc123",
 		Report: ReportPayload{
 			FormatVersion: "1",

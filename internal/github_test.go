@@ -49,3 +49,22 @@ func TestSelectSourceFiles(t *testing.T) {
 		t.Fatalf("first selected path = %q", got[0].Path)
 	}
 }
+
+func TestSelectSourceFilesUsesConfiguredSourceHints(t *testing.T) {
+	tree := []gitTreeEntry{
+		{Path: "deploy/service.yaml", Type: "blob", Size: 100},
+		{Path: "internal/app.go", Type: "blob", Size: 100},
+	}
+	cfg := ServiceRepoConfig{
+		ContextPaths: []string{"internal/**"},
+		SourceHints:  []string{"deploy/service.yaml"},
+	}
+
+	got := selectSourceFiles(tree, cfg, IncidentEnvelope{}, 1, 1024)
+	if len(got) != 1 {
+		t.Fatalf("selected %d files, want 1", len(got))
+	}
+	if got[0].Path != "deploy/service.yaml" {
+		t.Fatalf("selected path = %q, want deploy/service.yaml", got[0].Path)
+	}
+}

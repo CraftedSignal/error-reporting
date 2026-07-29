@@ -36,19 +36,21 @@ func TestServiceFromReportFallbacks(t *testing.T) {
 		{
 			name: "attr",
 			report: ReportPayload{Trigger: LogRecord{Attrs: []Attr{
-				{Key: "container_name", Value: "craftedsignal-worker"},
+				{Key: "container_name", Value: "worker"},
 			}}},
 			want: "worker",
 		},
 		{
-			name:   "message",
-			report: ReportPayload{Trigger: LogRecord{Message: "ti-bot auto-publish failed"}},
-			want:   "ti-bot",
+			name: "config",
+			report: ReportPayload{
+				ConfigSummary: map[string]string{"service": "api"},
+			},
+			want: "api",
 		},
 		{
 			name:   "default",
 			report: ReportPayload{Trigger: LogRecord{Message: "database failed"}},
-			want:   "platform",
+			want:   "unknown",
 		},
 	}
 

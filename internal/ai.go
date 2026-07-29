@@ -209,10 +209,66 @@ func DecodeResolutionPlan(content string) (ResolutionPlan, error) {
 		return ResolutionPlan{}, fmt.Errorf("ai response was not json")
 	}
 	var plan ResolutionPlan
-	if err := json.Unmarshal([]byte(content[start:end+1]), &plan); err != nil {
-		return ResolutionPlan{}, fmt.Errorf("decode resolution plan: %w", err)
+	body := content[start : end+1]
+	if err := json.Unmarshal([]byte(body), &plan); err != nil {
+		repaired := escapeJSONControlCharsInStrings(body)
+		if repaired == body {
+			return ResolutionPlan{}, fmt.Errorf("decode resolution plan: %w", err)
+		}
+		if repairErr := json.Unmarshal([]byte(repaired), &plan); repairErr != nil {
+			return ResolutionPlan{}, fmt.Errorf("decode resolution plan: %w", err)
+		}
 	}
 	return plan, nil
+}
+
+func escapeJSONControlCharsInStrings(value string) string {
+	var b strings.Builder
+	inString := false
+	escaped := false
+	changed := false
+	for _, r := range value {
+		if escaped {
+			b.WriteRune(r)
+			escaped = false
+			continue
+		}
+		if !inString {
+			if r == '"' {
+				inString = true
+			}
+			b.WriteRune(r)
+			continue
+		}
+		switch r {
+		case '\\':
+			b.WriteRune(r)
+			escaped = true
+		case '"':
+			b.WriteRune(r)
+			inString = false
+		case '\n':
+			b.WriteString(`\n`)
+			changed = true
+		case '\r':
+			b.WriteString(`\r`)
+			changed = true
+		case '\t':
+			b.WriteString(`\t`)
+			changed = true
+		default:
+			if r < 0x20 {
+				fmt.Fprintf(&b, `\u%04x`, r)
+				changed = true
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	if !changed {
+		return value
+	}
+	return b.String()
 }
 
 func NormalizeResolutionPlan(plan ResolutionPlan, incident IncidentEnvelope) ResolutionPlan {
@@ -318,7 +374,7 @@ func normalizeChoice(value string, allowed []string, fallback string) string {
 func defaultResolutionTitle(incident IncidentEnvelope) string {
 	msg := strings.TrimSpace(incident.Report.Trigger.Message)
 	if msg == "" {
-		msg = "platform error"
+		msg = "production error"
 	}
 	if len(msg) > 70 {
 		msg = msg[:70]

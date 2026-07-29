@@ -12,6 +12,16 @@ func TestDecodeResolutionPlan(t *testing.T) {
 	}
 }
 
+func TestDecodeResolutionPlanRepairsRawNewlineInString(t *testing.T) {
+	plan, err := DecodeResolutionPlan("{\"category\":\"code_bug\",\"action\":\"needs_human\",\"summary\":\"line one\nline two\"}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Summary != "line one\nline two" {
+		t.Fatalf("summary = %q", plan.Summary)
+	}
+}
+
 func TestHeuristicPlanOOM(t *testing.T) {
 	plan := HeuristicPlan(IncidentEnvelope{
 		Report: ReportPayload{

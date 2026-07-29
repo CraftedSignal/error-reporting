@@ -4,17 +4,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
+type IncidentRoute struct {
+	Match []string `json:"match"`
+}
+
 type ServiceRepoConfig struct {
-	Repo         string   `json:"repo"`
-	BaseBranch   string   `json:"base_branch"`
-	Mention      string   `json:"mention"`
-	ContextPaths []string `json:"context_paths"`
-	TestCommands []string `json:"test_commands"`
+	Repo         string          `json:"repo"`
+	BaseBranch   string          `json:"base_branch"`
+	Mention      string          `json:"mention"`
+	ContextPaths []string        `json:"context_paths"`
+	TestCommands []string        `json:"test_commands"`
+	Routes       []IncidentRoute `json:"routes,omitempty"`
+	SourceHints  []string        `json:"source_hints,omitempty"`
 }
 
 type ResolverConfig struct {
@@ -95,6 +103,13 @@ func ParseServiceRepoConfig(raw string) (map[string]ServiceRepoConfig, error) {
 		if cfg.BaseBranch == "" {
 			cfg.BaseBranch = "main"
 		}
+		for i, route := range cfg.Routes {
+			for _, pattern := range route.Match {
+				if _, err := regexp.Compile("(?is)" + pattern); err != nil {
+					return nil, fmt.Errorf("service repo %q route %d has invalid match pattern %q: %w", key, i, pattern, err)
+				}
+			}
+		}
 		repos[NormalizeServiceName(key)] = cfg
 		if NormalizeServiceName(key) != key {
 			delete(repos, key)
@@ -104,60 +119,7 @@ func ParseServiceRepoConfig(raw string) (map[string]ServiceRepoConfig, error) {
 }
 
 func DefaultServiceRepos() map[string]ServiceRepoConfig {
-	return map[string]ServiceRepoConfig{
-		"platform": {
-			Repo:       "CraftedSignal/platform",
-			BaseBranch: "main",
-			ContextPaths: []string{
-				"go.mod",
-				"cmd/**",
-				"pkg/errorreporting/**",
-				"pkg/logger/**",
-				"pkg/service/ai/**",
-				"pkg/workflows/**",
-				"config/**",
-				".github/**",
-			},
-			TestCommands: []string{"go test ./..."},
-		},
-		"ti-bot": {
-			Repo:       "CraftedSignal/ti-bot",
-			BaseBranch: "main",
-			ContextPaths: []string{
-				"go.mod",
-				"cmd/ti-bot/**",
-				"internal/pipeline/**",
-				"internal/publisher/**",
-				"internal/sources/**",
-				"config.example.yaml",
-				"Dockerfile",
-				".github/**",
-			},
-			TestCommands: []string{"go test ./..."},
-		},
-		"error-reporting": {
-			Repo:       "CraftedSignal/error-reporting",
-			BaseBranch: "main",
-			ContextPaths: []string{
-				"go.mod",
-				"cmd/**",
-				"internal/**",
-				"Dockerfile",
-				".github/**",
-			},
-			TestCommands: []string{"go test ./..."},
-		},
-		"infrastructure": {
-			Repo:       "CraftedSignal/infrastructure",
-			BaseBranch: "main",
-			ContextPaths: []string{
-				"terraform/**",
-				"k8s/**",
-				".github/**",
-			},
-			TestCommands: []string{"terraform fmt -check -recursive", "terraform validate"},
-		},
-	}
+	return map[string]ServiceRepoConfig{}
 }
 
 func ResolveServiceRepo(repos map[string]ServiceRepoConfig, service string) (string, ServiceRepoConfig, bool) {
@@ -165,17 +127,75 @@ func ResolveServiceRepo(repos map[string]ServiceRepoConfig, service string) (str
 	if cfg, ok := repos[service]; ok {
 		return service, normalizeRepoConfig(cfg), true
 	}
-	switch {
-	case strings.Contains(service, "ti-bot"):
-		cfg, ok := repos["ti-bot"]
-		return "ti-bot", normalizeRepoConfig(cfg), ok
-	case strings.Contains(service, "temporal"), strings.Contains(service, "worker"), strings.Contains(service, "server"), strings.Contains(service, "craftedsignal"):
-		cfg, ok := repos["platform"]
-		return "platform", normalizeRepoConfig(cfg), ok
-	default:
-		cfg, ok := repos["platform"]
-		return "platform", normalizeRepoConfig(cfg), ok
+	return "", ServiceRepoConfig{}, false
+}
+
+func ResolveIncidentRepo(repos map[string]ServiceRepoConfig, incident IncidentEnvelope) (string, ServiceRepoConfig, bool) {
+	if service, cfg, ok := ResolveConfiguredRoute(repos, incident); ok {
+		return service, cfg, true
 	}
+	return ResolveServiceRepo(repos, incident.Service)
+}
+
+func ResolveConfiguredRoute(repos map[string]ServiceRepoConfig, incident IncidentEnvelope) (string, ServiceRepoConfig, bool) {
+	document := incidentRouteDocument(incident)
+	keys := make([]string, 0, len(repos))
+	for key := range repos {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		cfg := normalizeRepoConfig(repos[key])
+		for _, route := range cfg.Routes {
+			if incidentRouteMatches(route, document) {
+				return key, cfg, true
+			}
+		}
+	}
+	return "", ServiceRepoConfig{}, false
+}
+
+func incidentRouteMatches(route IncidentRoute, document string) bool {
+	if len(route.Match) == 0 {
+		return false
+	}
+	for _, pattern := range route.Match {
+		re, err := regexp.Compile("(?is)" + pattern)
+		if err != nil || !re.MatchString(document) {
+			return false
+		}
+	}
+	return true
+}
+
+func incidentRouteDocument(incident IncidentEnvelope) string {
+	var b strings.Builder
+	appendRouteField(&b, "environment", incident.Environment)
+	appendRouteField(&b, "service", incident.Service)
+	appendRouteField(&b, "source", incident.Source)
+	appendRouteField(&b, "trigger.level", incident.Report.Trigger.Level)
+	appendRouteField(&b, "trigger.message", incident.Report.Trigger.Message)
+	for key, value := range incident.Report.ConfigSummary {
+		appendRouteField(&b, "config."+key, value)
+	}
+	for _, attr := range incident.Report.Trigger.Attrs {
+		value := fmt.Sprintf("%v", attr.Value)
+		appendRouteField(&b, attr.Key, value)
+		appendRouteField(&b, "attr."+attr.Key, value)
+	}
+	return b.String()
+}
+
+func appendRouteField(b *strings.Builder, key, value string) {
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if key == "" || value == "" {
+		return
+	}
+	b.WriteString(key)
+	b.WriteByte('=')
+	b.WriteString(value)
+	b.WriteByte('\n')
 }
 
 func normalizeRepoConfig(cfg ServiceRepoConfig) ServiceRepoConfig {

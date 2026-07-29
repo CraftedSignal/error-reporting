@@ -53,6 +53,7 @@ func TestPubSubHandlerSuppressesDuplicateIncidentWithGCSStore(t *testing.T) {
 	t.Setenv("ENVIRONMENT", "prod")
 	t.Setenv("NOTIFY_NON_PR", "true")
 	t.Setenv("MAX_LOG_ENTRIES", "0")
+	t.Setenv("SERVICE_REPOSITORIES_JSON", `{"application":{"repo":"Example/application","base_branch":"main","context_paths":[],"test_commands":[]}}`)
 
 	cfg, err := internal.LoadResolverConfigFromEnv()
 	if err != nil {
@@ -66,14 +67,14 @@ func TestPubSubHandlerSuppressesDuplicateIncidentWithGCSStore(t *testing.T) {
 		Source:      "local-test",
 		ReceivedAt:  time.Now().UTC(),
 		Environment: "prod",
-		Service:     "platform",
+		Service:     "application",
 		Report: internal.ReportPayload{
 			FormatVersion: "1",
 			TriggeredAt:   time.Now().UTC(),
 			Trigger: internal.LogRecord{
 				Time:    time.Now().UTC(),
 				Level:   "error",
-				Message: "Memory cgroup out of memory: Killed process 12345 (craftedsignal) total-vm:1960876kB anon-rss:521972kB",
+				Message: "Memory cgroup out of memory: Killed process 12345 (application) total-vm:1960876kB anon-rss:521972kB",
 			},
 			Runtime: internal.RuntimeInfo{IsSaaS: true},
 		},

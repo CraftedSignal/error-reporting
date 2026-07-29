@@ -63,7 +63,7 @@ func (r *Resolver) HandleIncident(ctx context.Context, incident IncidentEnvelope
 		incident.Fingerprint = FingerprintReport(incident.Service, incident.Report)
 	}
 
-	serviceKey, repoCfg, ok := ResolveServiceRepo(r.cfg.ServiceRepos, incident.Service)
+	serviceKey, repoCfg, ok := ResolveIncidentRepo(r.cfg.ServiceRepos, incident)
 	if serviceKey != "" {
 		incident.Service = serviceKey
 	}

@@ -115,7 +115,7 @@ func logFilterValue(value string) string {
 	value = strings.ReplaceAll(value, `\`, `\\`)
 	value = strings.ReplaceAll(value, `"`, `\"`)
 	if value == "" {
-		return "platform"
+		return "unknown"
 	}
 	return value
 }

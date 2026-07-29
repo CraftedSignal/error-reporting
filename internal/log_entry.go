@@ -22,7 +22,7 @@ type cloudLogSinkEntry struct {
 }
 
 // IncidentFromCloudLogEntry converts a raw Cloud Logging sink entry into the
-// same incident shape used for encrypted platform reports.
+// same incident shape used for encrypted application reports.
 func IncidentFromCloudLogEntry(raw []byte, environment string) (IncidentEnvelope, error) {
 	var entry cloudLogSinkEntry
 	if err := json.Unmarshal(raw, &entry); err != nil {
@@ -42,9 +42,6 @@ func IncidentFromCloudLogEntry(raw []byte, environment string) (IncidentEnvelope
 		entry.Resource.Labels["service_name"],
 		entry.Resource.Labels["namespace_name"],
 	))
-	if service == "craftedsignal" {
-		service = "platform"
-	}
 
 	attrs := []Attr{
 		{Key: "log_name", Value: entry.LogName},

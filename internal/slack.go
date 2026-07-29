@@ -85,13 +85,13 @@ func (n *SlackNotifier) NotifyResolution(ctx context.Context, msg ResolutionNoti
 		return fmt.Errorf("slack channel not configured for bot token")
 	}
 
-	heading := "Investigated platform error"
+	heading := "Investigated production error"
 	color := "#ffaa00"
 	if msg.PRURL != "" {
-		heading = "Auto-fix PR opened for platform error"
+		heading = "Auto-fix PR opened for production error"
 		color = "#2eb67d"
 	} else if strings.Contains(strings.ToLower(msg.Status), "needs human") {
-		heading = "Platform error needs human review"
+		heading = "Production error needs human review"
 		color = "#e01e5a"
 	}
 

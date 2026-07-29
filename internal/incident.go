@@ -21,7 +21,7 @@ type IncidentEnvelope struct {
 	Report      ReportPayload `json:"report"`
 }
 
-// NewIncidentEnvelope converts a decrypted platform report into a resolver
+// NewIncidentEnvelope converts a decrypted application report into a resolver
 // incident. Fingerprints are intentionally stable across repeated occurrences.
 func NewIncidentEnvelope(report ReportPayload, environment string) IncidentEnvelope {
 	if environment == "" {
@@ -54,15 +54,7 @@ func ServiceFromReport(report ReportPayload) string {
 			return NormalizeServiceName(v)
 		}
 	}
-	msg := strings.ToLower(report.Trigger.Message)
-	switch {
-	case strings.Contains(msg, "ti-bot"), strings.Contains(msg, "threat intel"), strings.Contains(msg, "auto-publish"):
-		return "ti-bot"
-	case strings.Contains(msg, "error-reporting"):
-		return "error-reporting"
-	default:
-		return "platform"
-	}
+	return "unknown"
 }
 
 // FingerprintReport returns a stable fingerprint that suppresses repeated
@@ -106,12 +98,10 @@ func AttrString(attrs []Attr, keys ...string) string {
 // NormalizeServiceName keeps service keys stable for repository routing.
 func NormalizeServiceName(value string) string {
 	value = strings.TrimSpace(strings.ToLower(value))
-	value = strings.TrimPrefix(value, "craftedsignal-")
-	value = strings.TrimPrefix(value, "craftedsignal/")
 	value = strings.ReplaceAll(value, "_", "-")
 	value = strings.Trim(value, " .:/")
 	if value == "" {
-		return "platform"
+		return "unknown"
 	}
 	return value
 }

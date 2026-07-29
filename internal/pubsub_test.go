@@ -12,7 +12,7 @@ func TestDecodeIncidentPubSubPush(t *testing.T) {
 		ID:          "abc",
 		Source:      "error-reporting",
 		Environment: "prod",
-		Service:     "platform",
+		Service:     "application",
 		Fingerprint: "abcdef123456",
 		Report: ReportPayload{
 			TriggeredAt: time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
@@ -51,7 +51,7 @@ func TestDecodeCloudLoggingPubSubPush(t *testing.T) {
 		"resource": map[string]interface{}{
 			"type": "k8s_node",
 			"labels": map[string]string{
-				"container_name": "craftedsignal-worker",
+				"container_name": "worker",
 			},
 		},
 		"jsonPayload": map[string]interface{}{

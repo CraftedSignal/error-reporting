@@ -393,7 +393,7 @@ func BuildPRBody(incident IncidentEnvelope, plan ResolutionPlan, cfg ServiceRepo
 }
 
 func selectSourceFiles(tree []gitTreeEntry, cfg ServiceRepoConfig, incident IncidentEnvelope, maxFiles, maxFileBytes int) []gitTreeEntry {
-	hints := sourceHints(incident)
+	hints := sourceHints(incident, cfg)
 	type scored struct {
 		entry gitTreeEntry
 		score int
@@ -443,7 +443,7 @@ func selectSourceFiles(tree []gitTreeEntry, cfg ServiceRepoConfig, incident Inci
 	return out
 }
 
-func sourceHints(incident IncidentEnvelope) []string {
+func sourceHints(incident IncidentEnvelope, cfg ServiceRepoConfig) []string {
 	values := []string{incident.Report.Trigger.Message}
 	for _, attr := range incident.Report.Trigger.Attrs {
 		values = append(values, fmt.Sprintf("%v", attr.Value))
@@ -458,26 +458,30 @@ func sourceHints(incident IncidentEnvelope) []string {
 	pathRE := regexp.MustCompile(`[A-Za-z0-9_./-]+\.(go|yaml|yml|json|tf|toml|sql|sh|md|js|ts|tsx|jsx)`)
 	seen := make(map[string]struct{})
 	var hints []string
+	addHint := func(value string) {
+		value = strings.TrimLeft(strings.TrimSpace(value), "./")
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		hints = append(hints, value)
+	}
+	for _, hint := range cfg.SourceHints {
+		addHint(hint)
+	}
 	for _, value := range values {
 		for _, match := range pathRE.FindAllString(value, -1) {
 			match = strings.TrimLeft(match, "./")
 			if idx := strings.Index(match, ":"); idx >= 0 {
 				match = match[:idx]
 			}
-			if match == "" {
-				continue
-			}
-			if _, ok := seen[match]; ok {
-				continue
-			}
-			seen[match] = struct{}{}
-			hints = append(hints, match)
+			addHint(match)
 			base := path.Base(match)
 			if base != match {
-				if _, ok := seen[base]; !ok {
-					seen[base] = struct{}{}
-					hints = append(hints, base)
-				}
+				addHint(base)
 			}
 		}
 	}
