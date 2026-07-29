@@ -17,11 +17,16 @@ RUN go mod download
 
 COPY . .
 
-# Build a statically-linked binary.
+# Build statically-linked binaries. The default entrypoint remains the ingest
+# function; Terraform overrides the command to /resolver for the worker service.
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-s -w -extldflags=-static" \
     -o /bin/function \
     ./cmd/function
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-s -w -extldflags=-static" \
+    -o /bin/resolver \
+    ./cmd/resolver
 
 # Prep stage: gather CA certs and a minimal passwd/group for scratch.
 FROM alpine:3.23 AS prep
@@ -35,7 +40,12 @@ RUN apk add --no-cache ca-certificates && \
 # --- Runtime image ---
 FROM scratch
 
-LABEL org.opencontainers.image.source="https://github.com/CraftedSignal/error-reporting"
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+
+LABEL org.opencontainers.image.source="https://github.com/CraftedSignal/error-reporting" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
 
 COPY --from=prep /scratch/etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=prep /scratch/etc/passwd /etc/passwd
@@ -43,6 +53,7 @@ COPY --from=prep /scratch/etc/group /etc/group
 
 # Copy the binary.
 COPY --from=builder --chmod=755 /bin/function /function
+COPY --from=builder --chmod=755 /bin/resolver /resolver
 
 # Run as non-root.
 USER 1000:1000

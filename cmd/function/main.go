@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,8 +25,12 @@ func main() {
 
 	deduper := internal.NewDeduper(5 * time.Minute)
 	notifier := internal.NewSlackNotifier(os.Getenv("SLACK_WEBHOOK_URL"), os.Getenv("SLACK_CHANNEL"))
+	var publisher *internal.PubSubPublisher
+	if topic := os.Getenv("ERROR_RESOLVER_TOPIC"); topic != "" {
+		publisher = internal.NewPubSubPublisher(os.Getenv("PROJECT_ID"), topic, internal.NewMetadataAccessTokenSource())
+	}
 
-	handler := newIngestHandler(ks, deduper, notifier)
+	handler := newIngestHandler(ks, deduper, notifier, publisher, os.Getenv("ENVIRONMENT"))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/logs", handler)
@@ -57,7 +62,7 @@ func main() {
 	}
 }
 
-func newIngestHandler(ks *internal.KeyStore, deduper *internal.Deduper, notifier *internal.SlackNotifier) http.HandlerFunc {
+func newIngestHandler(ks *internal.KeyStore, deduper *internal.Deduper, notifier *internal.SlackNotifier, publisher *internal.PubSubPublisher, environment string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -98,6 +103,21 @@ func newIngestHandler(ks *internal.KeyStore, deduper *internal.Deduper, notifier
 			if err := notifier.Notify(r.Context(), report); err != nil {
 				slog.Warn("failed to notify slack", slog.String("error", err.Error()))
 				// Continue processing other reports.
+			}
+			if publisher != nil {
+				ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+				incident := internal.NewIncidentEnvelope(report, environment)
+				if id, err := publisher.PublishIncident(ctx, incident); err != nil {
+					slog.Warn("failed to publish resolver incident",
+						slog.String("fingerprint", incident.Fingerprint),
+						slog.String("error", err.Error()))
+				} else {
+					slog.Info("published resolver incident",
+						slog.String("message_id", id),
+						slog.String("service", incident.Service),
+						slog.String("fingerprint", incident.Fingerprint))
+				}
+				cancel()
 			}
 		}
 

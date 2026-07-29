@@ -30,6 +30,10 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker ${{ vars.ARTIFACT_REGISTRY_HOST }}
 
+      - name: Image metadata
+        id: image-meta
+        run: echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
@@ -38,6 +42,9 @@ jobs:
           tags: |
             ${{ vars.ARTIFACT_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/error-reporting/function:${{ github.ref_name }}
             ${{ vars.ARTIFACT_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/error-reporting/function:latest
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ steps.image-meta.outputs.created }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

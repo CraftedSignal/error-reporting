@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build Function
+    name: Build Binaries
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -37,8 +37,10 @@ jobs:
       - name: Download Go modules
         run: go mod download
 
-      - name: Build binary
-        run: CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/function ./cmd/function
+      - name: Build binaries
+        run: |
+          CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/function ./cmd/function
+          CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/resolver ./cmd/resolver
 
       - name: Create source archive
         run: |
@@ -62,12 +64,19 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
 
+      - name: Image metadata
+        id: image-meta
+        run: echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Build container image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
           push: false
           tags: craftedsignal-error-reporting:test
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ steps.image-meta.outputs.created }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
