@@ -106,10 +106,19 @@ func NormalizeServiceName(value string) string {
 	return value
 }
 
-var fingerprintNoise = regexp.MustCompile(`(?i)\b([0-9a-f]{8,}|[0-9]+|[0-9a-f-]{32,})\b`)
+var (
+	// fingerprintUUID runs before fingerprintNoise: alternation in Go is
+	// leftmost-first, so the generic hex rule would consume a UUID's first
+	// 8-hex group and leave the random 4-char segments (and any glued
+	// suffix like "_5") behind, making fingerprints drift between runs of
+	// the same incident. No trailing \b — IDs are often glued to suffixes.
+	fingerprintUUID  = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+	fingerprintNoise = regexp.MustCompile(`(?i)\b([0-9a-f]{8,}|[0-9]+|[0-9a-f-]{32,})\b`)
+)
 
 func normalizeFingerprintText(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
+	value = fingerprintUUID.ReplaceAllString(value, "#")
 	value = fingerprintNoise.ReplaceAllString(value, "#")
 	value = strings.Join(strings.Fields(value), " ")
 	if len(value) > 300 {
