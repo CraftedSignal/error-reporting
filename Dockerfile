@@ -4,7 +4,7 @@
 # Builds a statically-linked Go binary and runs it as a non-root user in a
 # scratch base image (minimal attack surface, no shell/package manager).
 
-FROM golang:1.26.5-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 # Install git and ca-certificates for module downloads.
 RUN apk add --no-cache git ca-certificates
@@ -23,6 +23,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-s -w -extldflags=-static" \
     -o /bin/function \
     ./cmd/function
+
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-s -w -extldflags=-static" \
     -o /bin/resolver \
