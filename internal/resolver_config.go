@@ -44,9 +44,13 @@ type ResolverConfig struct {
 	MaxEdits         int
 	DryRun           bool
 	NotifyNonPR      bool
-	IncidentBucket   string
-	IncidentPrefix   string
-	IncidentTTL      time.Duration
+	// NotifyInvestigations extends NotifyNonPR to investigated-but-no-action
+	// outcomes. Default off: external-source blips and transient errors are
+	// recorded in the incident store without pinging Slack.
+	NotifyInvestigations bool
+	IncidentBucket       string
+	IncidentPrefix       string
+	IncidentTTL          time.Duration
 }
 
 func LoadResolverConfigFromEnv() (ResolverConfig, error) {
@@ -59,27 +63,28 @@ func LoadResolverConfigFromEnv() (ResolverConfig, error) {
 	}
 
 	cfg := ResolverConfig{
-		ProjectID:        os.Getenv("PROJECT_ID"),
-		Environment:      os.Getenv("ENVIRONMENT"),
-		GitHubToken:      os.Getenv("GITHUB_TOKEN"),
-		GitHubAPIBaseURL: envOrDefault("GITHUB_API_BASE_URL", "https://api.github.com"),
-		AIAPIKey:         firstNonEmpty(os.Getenv("AI_API_KEY"), os.Getenv("OPENAI_API_KEY")),
-		AIEndpoint:       envOrDefault("AI_ENDPOINT", "https://api.openai.com/v1/chat/completions"),
-		AIModel:          firstNonEmpty(os.Getenv("AI_MODEL"), os.Getenv("OPENAI_MODEL")),
-		SlackWebhookURL:  os.Getenv("SLACK_WEBHOOK_URL"),
-		SlackChannel:     os.Getenv("SLACK_CHANNEL"),
-		SlackMention:     os.Getenv("SLACK_MENTION"),
-		ServiceRepos:     serviceRepos,
-		MaxSourceFiles:   envInt("MAX_SOURCE_FILES", 12),
-		MaxFileBytes:     envInt("MAX_FILE_BYTES", 24*1024),
-		MaxPromptBytes:   envInt("MAX_PROMPT_BYTES", 120*1024),
-		MaxLogEntries:    envInt("MAX_LOG_ENTRIES", 60),
-		MaxEdits:         envInt("MAX_EDITS", 8),
-		DryRun:           envBool("DRY_RUN", false),
-		NotifyNonPR:      envBool("NOTIFY_NON_PR", true),
-		IncidentBucket:   os.Getenv("INCIDENT_STORE_BUCKET"),
-		IncidentPrefix:   envOrDefault("INCIDENT_STORE_PREFIX", "resolver-incidents"),
-		IncidentTTL:      envDuration("INCIDENT_SUPPRESSION_TTL", 7*24*time.Hour),
+		ProjectID:            os.Getenv("PROJECT_ID"),
+		Environment:          os.Getenv("ENVIRONMENT"),
+		GitHubToken:          os.Getenv("GITHUB_TOKEN"),
+		GitHubAPIBaseURL:     envOrDefault("GITHUB_API_BASE_URL", "https://api.github.com"),
+		AIAPIKey:             firstNonEmpty(os.Getenv("AI_API_KEY"), os.Getenv("OPENAI_API_KEY")),
+		AIEndpoint:           envOrDefault("AI_ENDPOINT", "https://api.openai.com/v1/chat/completions"),
+		AIModel:              firstNonEmpty(os.Getenv("AI_MODEL"), os.Getenv("OPENAI_MODEL")),
+		SlackWebhookURL:      os.Getenv("SLACK_WEBHOOK_URL"),
+		SlackChannel:         os.Getenv("SLACK_CHANNEL"),
+		SlackMention:         os.Getenv("SLACK_MENTION"),
+		ServiceRepos:         serviceRepos,
+		MaxSourceFiles:       envInt("MAX_SOURCE_FILES", 12),
+		MaxFileBytes:         envInt("MAX_FILE_BYTES", 24*1024),
+		MaxPromptBytes:       envInt("MAX_PROMPT_BYTES", 120*1024),
+		MaxLogEntries:        envInt("MAX_LOG_ENTRIES", 60),
+		MaxEdits:             envInt("MAX_EDITS", 8),
+		DryRun:               envBool("DRY_RUN", false),
+		NotifyNonPR:          envBool("NOTIFY_NON_PR", true),
+		NotifyInvestigations: envBool("NOTIFY_INVESTIGATIONS", false),
+		IncidentBucket:       os.Getenv("INCIDENT_STORE_BUCKET"),
+		IncidentPrefix:       envOrDefault("INCIDENT_STORE_PREFIX", "resolver-incidents"),
+		IncidentTTL:          envDuration("INCIDENT_SUPPRESSION_TTL", 7*24*time.Hour),
 	}
 	if cfg.Environment == "" {
 		cfg.Environment = "prod"
