@@ -141,7 +141,7 @@ func (r *Resolver) HandleIncident(ctx context.Context, incident IncidentEnvelope
 		n.DeployedSource = deployed
 		return r.notifier.NotifyResolution(ctx, n)
 	case "no_pr":
-		if !r.cfg.NotifyNonPR || !r.cfg.NotifyInvestigations {
+		if !r.cfg.NotifyNonPR {
 			r.recordOutcome(ctx, incident, plan, "", "investigated: no PR opened")
 			return nil
 		}
