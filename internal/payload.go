@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -53,7 +54,11 @@ type ReportPayload struct {
 // DecodeReportBatch parses the decrypted plaintext into a batch of reports.
 func DecodeReportBatch(plaintext []byte) ([]ReportPayload, error) {
 	var batch []ReportPayload
-	if err := json.Unmarshal(plaintext, &batch); err != nil {
+	// UseNumber keeps numeric attribute values exact; as float64, 1048576
+	// would print as 1.048576e+06.
+	dec := json.NewDecoder(bytes.NewReader(plaintext))
+	dec.UseNumber()
+	if err := dec.Decode(&batch); err != nil {
 		return nil, fmt.Errorf("decode report batch: %w", err)
 	}
 	return batch, nil

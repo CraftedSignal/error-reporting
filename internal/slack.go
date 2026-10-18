@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -199,6 +200,9 @@ func slackFields(r ReportPayload, companyID, correlationID, userID string) []map
 	if userID != "" {
 		fields = append(fields, map[string]interface{}{"title": "User ID", "value": userID, "short": true})
 	}
+	if details := slackDetails(r.Trigger.Attrs); details != "" {
+		fields = append(fields, map[string]interface{}{"title": "Details", "value": "```\n" + details + "\n```", "short": false})
+	}
 	if len(r.Before) > 0 || len(r.After) > 0 {
 		fields = append(fields, map[string]interface{}{
 			"title": "Context",
@@ -207,6 +211,44 @@ func slackFields(r ReportPayload, companyID, correlationID, userID string) []map
 		})
 	}
 	return fields
+}
+
+// slackEscaper neutralizes mrkdwn control characters in report values, which
+// can be attacker-influenced (the platform's CSP report endpoint is public):
+// &, < and > would otherwise let a value inject mentions or links, and a
+// backtick would end the code block.
+var slackEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "`", "'")
+
+const (
+	slackDetailLineLimit = 700 // same bound as the resolver's Error field
+	slackDetailsLimit    = 2000
+)
+
+// slackDetails renders the trigger's attributes as key=value lines, skipping
+// those that already have a field of their own. Only scalar values are shown:
+// reporters that predate attribute values sent {} for every one.
+func slackDetails(attrs []Attr) string {
+	lines := make([]string, 0, len(attrs))
+	for _, a := range attrs {
+		switch a.Key {
+		case "company_id", "correlation_id", "user_id":
+			continue
+		}
+		var value string
+		switch v := a.Value.(type) {
+		case string:
+			value = v
+		case json.Number:
+			value = v.String()
+		case bool:
+			value = strconv.FormatBool(v)
+		default:
+			continue
+		}
+		line := RedactString(a.Key + "=" + strings.Join(strings.Fields(value), " "))
+		lines = append(lines, slackEscaper.Replace(truncateSlack(line, slackDetailLineLimit)))
+	}
+	return truncateSlack(strings.Join(lines, "\n"), slackDetailsLimit)
 }
 
 func envLabel(rt RuntimeInfo) string {
