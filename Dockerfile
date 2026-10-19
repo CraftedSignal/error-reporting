@@ -30,7 +30,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     ./cmd/resolver
 
 # Prep stage: gather CA certs and a minimal passwd/group for scratch.
-FROM alpine:3.23 AS prep
+FROM alpine:3.24 AS prep
 
 RUN apk add --no-cache ca-certificates && \
     mkdir -p /scratch/etc/ssl/certs && \
