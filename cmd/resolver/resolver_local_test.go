@@ -81,7 +81,7 @@ func TestPubSubHandlerSuppressesDuplicateIncidentWithGCSStore(t *testing.T) {
 	})
 
 	for i := 0; i < 2; i++ {
-		req := httptest.NewRequest(http.MethodPost, "/pubsub", bytes.NewReader(body))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/pubsub", bytes.NewReader(body))
 		rr := httptest.NewRecorder()
 		handler.ServeHTTP(rr, req)
 		if rr.Code != http.StatusNoContent {
