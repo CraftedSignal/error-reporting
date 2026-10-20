@@ -1,11 +1,6 @@
 name: Build
 
 on:
-  push:
-    branches: [main, master]
-    paths-ignore:
-      - "**/*.md"
-      - ".github/ISSUE_TEMPLATE/**"
   pull_request:
     branches: [main, master]
     paths-ignore:
@@ -21,42 +16,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build Binaries
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Download Go modules
-        run: go mod download
-
-      - name: Build binaries
-        run: |
-          CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/function ./cmd/function
-          CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/resolver ./cmd/resolver
-
-      - name: Create source archive
-        run: |
-          mkdir -p bin
-          zip -r bin/function-source.zip cmd internal go.mod go.sum Makefile
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: function-source
-          path: bin/function-source.zip
-          retention-days: 7
-
   container:
-    name: Container Build & Scan
+    name: Container Build & Scan (${{ matrix.image }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: function
+            target: runtime-function
+          - image: resolver
+            target: runtime-resolver
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -72,8 +42,10 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
+          target: ${{ matrix.target }}
           push: false
-          tags: craftedsignal-error-reporting:test
+          load: true
+          tags: craftedsignal-error-reporting-${{ matrix.image }}:test
           build-args: |
             VCS_REF=${{ github.sha }}
             BUILD_DATE=${{ steps.image-meta.outputs.created }}
@@ -83,7 +55,7 @@ jobs:
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
-          image-ref: "craftedsignal-error-reporting:test"
+          image-ref: "craftedsignal-error-reporting-${{ matrix.image }}:test"
           format: "table"
           severity: "CRITICAL,HIGH,MEDIUM"
           ignore-unfixed: true

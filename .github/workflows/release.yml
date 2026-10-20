@@ -12,8 +12,16 @@ permissions:
 
 jobs:
   release:
-    name: Build and Push Container
+    name: Build and Push ${{ matrix.image }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: function
+            target: runtime-function
+          - image: resolver
+            target: runtime-resolver
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -38,10 +46,11 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
+          target: ${{ matrix.target }}
           push: true
           tags: |
-            ${{ vars.ARTIFACT_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/error-reporting/function:${{ github.ref_name }}
-            ${{ vars.ARTIFACT_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/error-reporting/function:latest
+            ${{ vars.ARTIFACT_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/error-reporting/${{ matrix.image }}:${{ github.ref_name }}
+            ${{ vars.ARTIFACT_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/error-reporting/${{ matrix.image }}:latest
           build-args: |
             VCS_REF=${{ github.sha }}
             BUILD_DATE=${{ steps.image-meta.outputs.created }}
