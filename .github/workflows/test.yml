@@ -1,11 +1,6 @@
 name: Test
 
 on:
-  push:
-    branches: [main, master]
-    paths-ignore:
-      - "**/*.md"
-      - ".github/ISSUE_TEMPLATE/**"
   pull_request:
     branches: [main, master]
     paths-ignore:
@@ -17,16 +12,19 @@ permissions:
   contents: read
 
 concurrency:
-  group: test-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  unit-tests:
-    name: Unit Tests
+  quality:
+    name: Tests and Lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Verify workflow policy
+        run: ruby .github/scripts/verify-workflow-policy.rb
 
       - name: Verify Dependabot runtime image coverage
         run: ruby .github/scripts/verify-dependabot-images.rb
@@ -49,19 +47,6 @@ jobs:
           name: coverage
           path: coverage.out
           retention-days: 7
-
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        with:
-          go-version-file: go.mod
-          cache: true
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a
