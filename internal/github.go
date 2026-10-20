@@ -686,7 +686,9 @@ func (c *GitHubClient) request(ctx context.Context, method, apiPath string, body
 		return fmt.Errorf("github %s %s returned %d: %s", method, apiPath, resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	if out == nil {
-		io.Copy(io.Discard, resp.Body)
+		if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+			return fmt.Errorf("drain github %s %s response: %w", method, apiPath, err)
+		}
 		return nil
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {

@@ -1,6 +1,40 @@
 package internal
 
-import "testing"
+import (
+	"errors"
+	"net/http"
+	"testing"
+)
+
+var errResponseBodyRead = errors.New("response body read failed")
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+type failingReadCloser struct{}
+
+func (failingReadCloser) Read([]byte) (int, error) { return 0, errResponseBodyRead }
+func (failingReadCloser) Close() error             { return nil }
+
+func TestGitHubRequestReturnsResponseBodyDrainError(t *testing.T) {
+	client := NewGitHubClient("", "https://api.github.test")
+	client.client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusNoContent,
+			Header:     make(http.Header),
+			Body:       failingReadCloser{},
+			Request:    req,
+		}, nil
+	})}
+
+	err := client.request(t.Context(), http.MethodPost, "/resource", nil, nil)
+	if !errors.Is(err, errResponseBodyRead) {
+		t.Fatalf("request() error = %v, want response body read error", err)
+	}
+}
 
 func TestApplyFileEditExactMatch(t *testing.T) {
 	got, err := ApplyFileEdit("a\nb\nc\n", true, FileEdit{Path: "main.go", Find: "b\n", Replace: "bb\n"})
