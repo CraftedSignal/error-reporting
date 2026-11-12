@@ -131,3 +131,56 @@ func TestResolverSuppressesDuplicateIncidentBeforeAnalysisAndSlack(t *testing.T)
 		t.Fatalf("store updates = %d, want 0", store.updates)
 	}
 }
+
+func TestResolverNoPRInvestigationRecordedButNotPostedToSlack(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	store := &fakeIncidentStore{claim: IncidentClaim{New: true}}
+	analyzer := &fakeAnalyzer{plan: ResolutionPlan{
+		Category:   "external_source",
+		Action:     "no_pr",
+		Confidence: "high",
+	}}
+	cfg := ResolverConfig{
+		Environment:     "prod",
+		SlackWebhookURL: server.URL,
+		ServiceRepos: map[string]ServiceRepoConfig{
+			"application": {Repo: "Example/application", BaseBranch: "main"},
+		},
+		NotifyNonPR: true,
+		AIAPIKey:    "k",
+		AIModel:     "m",
+	}
+	resolver := NewResolver(cfg, nil)
+	resolver.store = store
+	resolver.ai = analyzer
+
+	incident := IncidentEnvelope{
+		Environment: "prod",
+		Service:     "application",
+		Fingerprint: "abc123",
+		Report: ReportPayload{
+			FormatVersion: "1",
+			TriggeredAt:   time.Now().UTC(),
+			Trigger:       LogRecord{Time: time.Now().UTC(), Level: "error", Message: "upstream feed returned 503"},
+		},
+	}
+
+	if err := resolver.HandleIncident(context.Background(), incident); err != nil {
+		t.Fatalf("HandleIncident() error = %v", err)
+	}
+	if !analyzer.called {
+		t.Fatal("analyzer was not called")
+	}
+	if called {
+		t.Fatal("Slack webhook was called for investigated no-PR outcome")
+	}
+	if store.updates != 1 {
+		t.Fatalf("store updates = %d, want 1 (outcome still recorded)", store.updates)
+	}
+}
