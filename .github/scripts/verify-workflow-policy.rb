@@ -90,6 +90,17 @@ assert(scan.dig("with", "image-ref") == published_image &&
        "the scanned local image must be the exact image pushed")
 assert(scan.dig("with", "exit-code") == "1" && !scan["continue-on-error"],
        "release image scanning must fail closed")
+assert(publish.fetch("if", "").include?("github.ref == 'refs/heads/main'") &&
+       !publish.key?("environment"), "publishing OIDC subject must remain main-only")
+source_checkout = publish_steps.find { |step| step.fetch("uses", "").include?("actions/checkout@") }
+assert(source_checkout.dig("with", "ref") == "${{ needs.prepare.outputs.source_sha }}",
+       "publishing must build the validated tag commit, even when main advances")
+request = release_jobs.fetch("request-release")
+assert(!request.fetch("permissions").key?("id-token") && !request.to_s.include?("secrets."),
+       "tag dispatch must not receive cloud OIDC or production secrets")
+assert(request.fetch("steps").any? { |step| step.fetch("run", "").include?("--ref main") },
+       "tag dispatch must run the trusted main workflow")
+
 release_jobs.each do |name, job|
   next if name == "release"
 
@@ -97,7 +108,7 @@ release_jobs.each do |name, job|
          "only the publishing job may request OIDC")
 end
 notification = release_jobs.fetch("notify-failure")
-assert(Array(notification["needs"]).sort == %w[release validate] &&
+assert(Array(notification["needs"]).sort == %w[prepare release validate] &&
        notification.fetch("if").include?("needs.validate.result == 'failure'") &&
        notification.fetch("if").include?("needs.release.result == 'failure'"),
        "Slack must still receive validation and publication failures")

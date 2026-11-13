@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing version tag on main to publish (for example v1.2.3)'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -14,18 +19,68 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  request-release:
+    name: Request trusted main release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      # Tag events have a tag OIDC subject, which the cloud identity must reject.
+      # Dispatch the trusted main workflow; this job never obtains cloud auth.
+      - name: Dispatch main workflow with the requested tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo "::error::Invalid release version tag"
+            exit 1
+          fi
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref main --field "tag=$RELEASE_TAG"
+
+  prepare:
+    name: Verify release source on main
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.source.outputs.tag }}
+      source_sha: ${{ steps.source.outputs.source_sha }}
+    steps:
+      - name: Checkout trusted workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify workflow policy
+        run: ruby .github/scripts/verify-workflow-policy.rb
+
+      - name: Test release source validation
+        run: python3 -m unittest discover -s .github/tests -p '*_test.py'
+
+      - name: Verify requested release tag
+        id: source
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: python3 .github/scripts/release-source.py --tag "$RELEASE_TAG"
+
   validate:
     name: Release validation
+    needs: prepare
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
           persist-credentials: false
-
-      - name: Verify workflow policy
-        run: ruby .github/scripts/verify-workflow-policy.rb
 
       - name: Verify Dependabot runtime image coverage
         run: ruby .github/scripts/verify-dependabot-images.rb
@@ -55,7 +110,8 @@ jobs:
 
   release:
     name: Build and Push ${{ matrix.image }}
-    needs: validate
+    needs: [prepare, validate]
+    if: github.ref == 'refs/heads/main'
     permissions:
       contents: read
       id-token: write
@@ -72,6 +128,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
@@ -88,10 +147,10 @@ jobs:
           push: false
           load: true
           tags: |
-            ${{ vars.ARTIFACT_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/error-reporting/${{ matrix.image }}:${{ github.ref_name }}
+            ${{ vars.ARTIFACT_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/error-reporting/${{ matrix.image }}:${{ needs.prepare.outputs.tag }}
             ${{ vars.ARTIFACT_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/error-reporting/${{ matrix.image }}:latest
           build-args: |
-            VCS_REF=${{ github.sha }}
+            VCS_REF=${{ needs.prepare.outputs.source_sha }}
             BUILD_DATE=${{ steps.image-meta.outputs.created }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -99,7 +158,7 @@ jobs:
       - name: Scan image before publication
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
-          image-ref: ${{ vars.ARTIFACT_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/error-reporting/${{ matrix.image }}:${{ github.ref_name }}
+          image-ref: ${{ vars.ARTIFACT_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/error-reporting/${{ matrix.image }}:${{ needs.prepare.outputs.tag }}
           format: "table"
           severity: "CRITICAL,HIGH,MEDIUM"
           ignore-unfixed: true
@@ -118,7 +177,7 @@ jobs:
 
       - name: Push scanned image
         env:
-          IMAGE: ${{ vars.ARTIFACT_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/error-reporting/${{ matrix.image }}:${{ github.ref_name }}
+          IMAGE: ${{ vars.ARTIFACT_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/error-reporting/${{ matrix.image }}:${{ needs.prepare.outputs.tag }}
           LATEST_IMAGE: ${{ vars.ARTIFACT_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/error-reporting/${{ matrix.image }}:latest
         run: |
           docker push "$IMAGE"
@@ -126,15 +185,15 @@ jobs:
 
   notify-failure:
     name: Notify release failure
-    needs: [validate, release]
-    if: ${{ always() && (needs.validate.result == 'failure' || needs.release.result == 'failure') }}
+    needs: [prepare, validate, release]
+    if: ${{ always() && github.ref == 'refs/heads/main' && (needs.prepare.result == 'failure' || needs.validate.result == 'failure' || needs.release.result == 'failure') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
     env:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
       SLACK_CHANNEL: ${{ vars.SLACK_CHANNEL }}
-      RELEASE_REF: ${{ github.ref_name }}
+      RELEASE_REF: ${{ inputs.tag }}
     steps:
       - name: Notify Slack on failure
         if: env.SLACK_WEBHOOK_URL != ''
