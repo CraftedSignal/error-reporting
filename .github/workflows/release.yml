@@ -8,11 +8,57 @@ on:
 
 permissions:
   contents: read
-  packages: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
+  validate:
+    name: Release validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Verify workflow policy
+        run: ruby .github/scripts/verify-workflow-policy.rb
+
+      - name: Verify Dependabot runtime image coverage
+        run: ruby .github/scripts/verify-dependabot-images.rb
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.4'
+          cache: true
+
+      - name: Run release tests and vet
+        run: |
+          go test -race ./...
+          go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a
+        with:
+          version: v2.15.0
+          args: --config=.github/golangci.yml --timeout=15m
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+
+      - name: Run govulncheck
+        run: govulncheck ./...
+
   release:
     name: Build and Push ${{ matrix.image }}
+    needs: validate
+    permissions:
+      contents: read
+      id-token: write
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -30,25 +76,17 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
 
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ vars.ARTIFACT_REGISTRY_HOST }}
-
       - name: Image metadata
         id: image-meta
         run: echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push
+      - name: Build image for scanning
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           target: ${{ matrix.target }}
-          push: true
+          push: false
+          load: true
           tags: |
             ${{ vars.ARTIFACT_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/error-reporting/${{ matrix.image }}:${{ github.ref_name }}
             ${{ vars.ARTIFACT_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/error-reporting/${{ matrix.image }}:latest
@@ -58,19 +96,56 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Notify Slack on failure
-        if: failure() && env.SLACK_WEBHOOK_URL != ''
+      - name: Scan image before publication
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: ${{ vars.ARTIFACT_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/error-reporting/${{ matrix.image }}:${{ github.ref_name }}
+          format: "table"
+          severity: "CRITICAL,HIGH,MEDIUM"
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Configure Docker for Artifact Registry
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_CHANNEL: ${{ vars.SLACK_CHANNEL }}
+          ARTIFACT_REGISTRY_HOST: ${{ vars.ARTIFACT_REGISTRY_HOST }}
+        run: gcloud auth configure-docker "$ARTIFACT_REGISTRY_HOST" --quiet
+
+      - name: Push scanned image
+        env:
+          IMAGE: ${{ vars.ARTIFACT_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/error-reporting/${{ matrix.image }}:${{ github.ref_name }}
+          LATEST_IMAGE: ${{ vars.ARTIFACT_REGISTRY_HOST }}/${{ vars.GCP_PROJECT_ID }}/error-reporting/${{ matrix.image }}:latest
         run: |
-          MSG="❌ error-reporting release failed for ${{ github.ref_name }}: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          docker push "$IMAGE"
+          docker push "$LATEST_IMAGE"
+
+  notify-failure:
+    name: Notify release failure
+    needs: [validate, release]
+    if: ${{ always() && (needs.validate.result == 'failure' || needs.release.result == 'failure') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      SLACK_CHANNEL: ${{ vars.SLACK_CHANNEL }}
+      RELEASE_REF: ${{ github.ref_name }}
+    steps:
+      - name: Notify Slack on failure
+        if: env.SLACK_WEBHOOK_URL != ''
+        run: |
+          MSG="❌ error-reporting release failed for $RELEASE_REF: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [[ "$SLACK_WEBHOOK_URL" == xoxb-* ]]; then
             curl -fsSL -X POST -H 'Content-Type: application/json' -H "Authorization: Bearer $SLACK_WEBHOOK_URL" \
-              --data "{\"channel\":\"$SLACK_CHANNEL\",\"text\":\"$MSG\"}" \
+              --data "$(jq -cn --arg channel "$SLACK_CHANNEL" --arg text "$MSG" '{channel: $channel, text: $text}')" \
               https://slack.com/api/chat.postMessage
           else
             curl -fsSL -X POST -H 'Content-Type: application/json' \
-              --data "{\"text\":\"$MSG\"}" \
+              --data "$(jq -cn --arg text "$MSG" '{text: $text}')" \
               "$SLACK_WEBHOOK_URL"
           fi
