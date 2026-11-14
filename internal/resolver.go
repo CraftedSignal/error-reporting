@@ -141,11 +141,10 @@ func (r *Resolver) HandleIncident(ctx context.Context, incident IncidentEnvelope
 		n.DeployedSource = deployed
 		return r.notifier.NotifyResolution(ctx, n)
 	case "no_pr":
-		if !r.cfg.NotifyNonPR {
-			r.recordOutcome(ctx, incident, plan, "", "investigated: no PR opened")
-			return nil
-		}
-		return r.finish(ctx, incident, repoCfg, plan, "", "investigated: no PR opened", true)
+		// Investigated with no PR and no human follow-up needed: record only,
+		// never post to Slack (regardless of NotifyNonPR).
+		r.recordOutcome(ctx, incident, plan, "", "investigated: no PR opened")
+		return nil
 	default:
 		if !r.cfg.NotifyNonPR {
 			r.recordOutcome(ctx, incident, plan, "", "needs human review")

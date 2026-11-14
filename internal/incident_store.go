@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
@@ -17,6 +18,35 @@ import (
 var (
 	ErrIncidentRecordExists = errors.New("incident record already exists")
 	ErrIncidentRecordGone   = errors.New("incident record not found")
+)
+
+// StatusError is returned for non-success GCS responses so callers can
+// classify failures by HTTP status code rather than message text.
+type StatusError struct {
+	Code int
+	Body string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("gcs incident store returned %d: %s", e.Code, e.Body)
+}
+
+// isTransientStoreError reports whether err is a rate-limit or server-side
+// failure that is worth retrying.
+func isTransientStoreError(err error) bool {
+	var se *StatusError
+	if !errors.As(err, &se) {
+		return false
+	}
+	return se.Code == http.StatusTooManyRequests || se.Code >= 500
+}
+
+const (
+	// duplicateWriteInterval bounds how often the duplicate counter of one
+	// incident is rewritten. GCS allows about one write per second per object.
+	duplicateWriteInterval = 10 * time.Second
+	createMaxAttempts      = 4
+	createRetryBackoff     = 200 * time.Millisecond
 )
 
 type IncidentStore interface {
@@ -63,6 +93,9 @@ type GCSIncidentStore struct {
 	uploadURL  string
 	client     *http.Client
 	tokens     AccessTokenSource
+
+	dupInterval  time.Duration
+	retryBackoff time.Duration
 }
 
 func NewGCSIncidentStore(bucket, prefix string, ttl time.Duration, tokens AccessTokenSource) *GCSIncidentStore {
@@ -77,6 +110,29 @@ func NewGCSIncidentStore(bucket, prefix string, ttl time.Duration, tokens Access
 		uploadURL:  envOrDefault("GCS_UPLOAD_BASE_URL", "https://storage.googleapis.com/upload/storage/v1"),
 		client:     &http.Client{Timeout: 10 * time.Second},
 		tokens:     tokens,
+
+		dupInterval:  duplicateWriteInterval,
+		retryBackoff: createRetryBackoff,
+	}
+}
+
+// createWithRetry attempts the first-time create, retrying transient errors
+// (429/5xx) with a short exponential backoff.
+func (s *GCSIncidentStore) createWithRetry(ctx context.Context, objectName string, record IncidentRecord) (IncidentRecord, error) {
+	backoff := s.retryBackoff
+	var err error
+	for attempt := 1; ; attempt++ {
+		var created IncidentRecord
+		created, err = s.writeRecord(ctx, objectName, record, "0")
+		if err == nil || !isTransientStoreError(err) || attempt >= createMaxAttempts {
+			return created, err
+		}
+		select {
+		case <-ctx.Done():
+			return IncidentRecord{}, err
+		case <-time.After(backoff):
+		}
+		backoff *= 2
 	}
 }
 
@@ -88,12 +144,22 @@ func (s *GCSIncidentStore) Claim(ctx context.Context, incident IncidentEnvelope)
 	record := NewIncidentRecord(incident, now)
 	objectName := s.objectName(record)
 
-	created, err := s.writeRecord(ctx, objectName, record, "0")
+	created, err := s.createWithRetry(ctx, objectName, record)
 	if err == nil {
 		return IncidentClaim{New: true, Record: created}, nil
 	}
 	if !errors.Is(err, ErrIncidentRecordExists) {
-		return IncidentClaim{}, err
+		if !isTransientStoreError(err) {
+			return IncidentClaim{}, err
+		}
+		// Rate limited on create: the object may already exist (a duplicate
+		// burst). If a live record is readable, treat as duplicate; otherwise
+		// surface the original retryable error.
+		existing, _, readErr := s.readRecord(ctx, objectName)
+		if readErr != nil || s.expired(existing, now) {
+			return IncidentClaim{}, err
+		}
+		return IncidentClaim{New: false, Record: existing}, nil
 	}
 
 	existing, generation, err := s.readRecord(ctx, objectName)
@@ -123,6 +189,12 @@ func (s *GCSIncidentStore) Claim(ctx context.Context, incident IncidentEnvelope)
 		return IncidentClaim{}, updateErr
 	}
 
+	// Duplicate: only rewrite the object when the stored record is older than
+	// dupInterval, so a burst costs at most one write per interval.
+	if !existing.UpdatedAt.IsZero() && now.Sub(existing.UpdatedAt) < s.dupInterval {
+		return IncidentClaim{New: false, Record: existing}, nil
+	}
+
 	existing.Count++
 	existing.LastSeen = now
 	existing.LastTriggeredAt = nonZeroTime(incident.Report.TriggeredAt, existing.LastTriggeredAt, now)
@@ -134,7 +206,10 @@ func (s *GCSIncidentStore) Claim(ctx context.Context, incident IncidentEnvelope)
 		existing.Message = RedactString(incident.Report.Trigger.Message)
 	}
 	if _, updateErr := s.writeRecord(ctx, objectName, existing, generation); updateErr != nil && !errors.Is(updateErr, ErrIncidentRecordExists) {
-		return IncidentClaim{}, updateErr
+		// A duplicate must never fail the request: the counter is best effort.
+		slog.Info("duplicate incident counter update skipped",
+			slog.String("fingerprint", record.Fingerprint),
+			slog.String("error", updateErr.Error()))
 	}
 	return IncidentClaim{New: false, Record: existing}, nil
 }
@@ -287,7 +362,7 @@ func (s *GCSIncidentStore) doJSON(ctx context.Context, method, rawURL string, bo
 	}
 	if resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("gcs incident store returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return &StatusError{Code: resp.StatusCode, Body: strings.TrimSpace(string(respBody))}
 	}
 	if out == nil {
 		return nil

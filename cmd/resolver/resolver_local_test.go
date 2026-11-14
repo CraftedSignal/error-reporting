@@ -93,8 +93,10 @@ func TestPubSubHandlerSuppressesDuplicateIncidentWithGCSStore(t *testing.T) {
 		t.Fatalf("slack calls = %d, want 1", slackCalls)
 	}
 	record := gcs.onlyRecord()
-	if record.Count != 2 {
-		t.Fatalf("incident count = %d, want 2", record.Count)
+	// The duplicate arrived within the counter write interval, so the stored
+	// count is intentionally not rewritten.
+	if record.Count != 1 {
+		t.Fatalf("incident count = %d, want 1", record.Count)
 	}
 	if record.Status != "needs human review" {
 		t.Fatalf("incident status = %q, want needs human review", record.Status)
