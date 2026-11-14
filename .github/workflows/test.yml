@@ -24,6 +24,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
+      - name: Test release source validation
+        run: python3 -m unittest discover -s .github/tests -p '*_test.py'
+
       - name: Verify workflow policy
         run: ruby .github/scripts/verify-workflow-policy.rb
 
