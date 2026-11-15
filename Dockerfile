@@ -17,19 +17,12 @@ RUN go mod download
 
 COPY . .
 
-# Build each binary in its own target so a runtime image never inherits the
-# other service's executable.
+# Build the statically-linked ingestor binary.
 FROM builder-base AS builder-function
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-s -w -extldflags=-static" \
     -o /bin/function \
     ./cmd/function
-
-FROM builder-base AS builder-resolver
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags="-s -w -extldflags=-static" \
-    -o /bin/resolver \
-    ./cmd/resolver
 
 # Prep stage: gather CA certs and a minimal passwd/group for scratch.
 FROM alpine:3.24 AS prep
@@ -58,13 +51,6 @@ COPY --from=prep /scratch/etc/group /etc/group
 USER 1000:1000
 
 EXPOSE 8080
-
-# --- Resolver runtime image ---
-FROM runtime-base AS runtime-resolver
-
-COPY --from=builder-resolver --chmod=755 /bin/resolver /resolver
-
-ENTRYPOINT ["/resolver"]
 
 # --- Ingest runtime image (default target) ---
 FROM runtime-base AS runtime-function

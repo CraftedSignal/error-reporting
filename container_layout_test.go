@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestRuntimeImagesContainOnlyTheirOwnBinary(t *testing.T) {
+func TestRuntimeImageContainsOnlyIngestorBinary(t *testing.T) {
 	data, err := os.ReadFile("Dockerfile")
 	if err != nil {
 		t.Fatal(err)
@@ -21,7 +21,6 @@ func TestRuntimeImagesContainOnlyTheirOwnBinary(t *testing.T) {
 		forbidden  string
 	}{
 		{stage: "runtime-function", binary: "/function", entrypoint: `ENTRYPOINT ["/function"]`, forbidden: "/resolver"},
-		{stage: "runtime-resolver", binary: "/resolver", entrypoint: `ENTRYPOINT ["/resolver"]`, forbidden: "/function"},
 	} {
 		t.Run(tc.stage, func(t *testing.T) {
 			section := dockerStage(t, dockerfile, tc.stage)

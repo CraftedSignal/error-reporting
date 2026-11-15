@@ -77,55 +77,6 @@ func (n *SlackNotifier) Notify(ctx context.Context, r ReportPayload) error {
 	})
 }
 
-// NotifyResolution sends the resolver handoff: mention first, then PR/status.
-func (n *SlackNotifier) NotifyResolution(ctx context.Context, msg ResolutionNotification) error {
-	if n.webhookURL == "" {
-		return fmt.Errorf("slack webhook not configured")
-	}
-	if n.isBotToken() && n.channel == "" {
-		return fmt.Errorf("slack channel not configured for bot token")
-	}
-
-	heading := "Investigated production error"
-	color := "#ffaa00"
-	if msg.PRURL != "" {
-		heading = "Auto-fix PR opened for production error"
-		color = "#2eb67d"
-	} else if strings.Contains(strings.ToLower(msg.Status), "needs human") {
-		heading = "Production error needs human review"
-		color = "#e01e5a"
-	}
-
-	text := strings.TrimSpace(strings.Join([]string{msg.Mention, heading + " in " + msg.Service + " " + msg.Environment}, " "))
-	fields := []map[string]interface{}{
-		{"title": "Status", "value": emptyFallback(msg.Status, "unknown"), "short": true},
-		{"title": "Category", "value": emptyFallback(msg.Category, "unknown"), "short": true},
-		{"title": "Deployed source", "value": "`" + emptyFallback(msg.DeployedSource, "unknown") + "`", "short": false},
-		{"title": "Error", "value": truncateSlack(RedactString(msg.Error), 700), "short": false},
-		{"title": "Impact", "value": emptyFallback(truncateSlack(RedactString(msg.Impact), 700), "unknown"), "short": false},
-		{"title": "Confidence", "value": emptyFallback(msg.Confidence, "low"), "short": true},
-		{"title": "Fingerprint", "value": "`" + emptyFallback(msg.Fingerprint, "unknown") + "`", "short": true},
-	}
-	if msg.PRURL != "" {
-		fields = append([]map[string]interface{}{{"title": "PR", "value": msg.PRURL, "short": false}}, fields...)
-	}
-
-	return n.send(ctx, map[string]interface{}{
-		"text": text,
-		"attachments": []map[string]interface{}{
-			{
-				"color":     color,
-				"title":     heading,
-				"fallback":  text,
-				"fields":    fields,
-				"footer":    "CraftedSignal error resolver",
-				"ts":        time.Now().Unix(),
-				"mrkdwn_in": []string{"text", "fields"},
-			},
-		},
-	})
-}
-
 func (n *SlackNotifier) send(ctx context.Context, payload map[string]interface{}) error {
 	var (
 		url  = n.webhookURL
@@ -172,13 +123,6 @@ func (n *SlackNotifier) send(ctx context.Context, payload map[string]interface{}
 	return nil
 }
 
-func emptyFallback(value, fallback string) string {
-	if strings.TrimSpace(value) == "" {
-		return fallback
-	}
-	return value
-}
-
 func truncateSlack(value string, limit int) string {
 	if len(value) <= limit {
 		return value
@@ -220,7 +164,7 @@ func slackFields(r ReportPayload, companyID, correlationID, userID string) []map
 var slackEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "`", "'")
 
 const (
-	slackDetailLineLimit = 700 // same bound as the resolver's Error field
+	slackDetailLineLimit = 700 // bound each diagnostic attribute
 	slackDetailsLimit    = 2000
 )
 
