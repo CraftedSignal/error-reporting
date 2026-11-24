@@ -1,8 +1,6 @@
 module github.com/craftedsignal/error-reporting
 
-go 1.26.5
-
-toolchain go1.27.4
+go 1.27.4
 
 require (
 	filippo.io/edwards25519 v1.2.0
