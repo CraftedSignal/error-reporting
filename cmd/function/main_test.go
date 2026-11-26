@@ -44,8 +44,8 @@ func TestIngestDeliversEncryptedReportsAndSuppressesDuplicates(t *testing.T) {
 	}))
 	defer slack.Close()
 
-	handler := newIngestHandler(keys, internal.NewDeduper(time.Minute), internal.NewSlackNotifier(slack.URL, ""))
-	body := sealBatch(t, publicKey, `[{"v":"1","trigger":{"level":"error","msg":"query failed","attrs":[{"key":"error","value":"connection refused"}]},"runtime":{"is_saas":true}}]`)
+	handler := newIngestHandler(keys, internal.NewDeduper(time.Minute), internal.NewSlackNotifier(slack.URL, ""), noReverseDNS)
+	body := sealBatch(t, publicKey, `[{"v":"1","triggered_at":"2026-11-26T10:00:01Z","trigger":{"time":"2026-11-26T10:00:00Z","level":"error","msg":"query failed","attrs":[{"key":"error","value":"connection refused"}]},"runtime":{"is_saas":true}}]`)
 	for range 2 {
 		request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/logs", bytes.NewReader(body))
 		response := httptest.NewRecorder()
@@ -83,7 +83,7 @@ func TestIngestRejectsInvalidRequests(t *testing.T) {
 		{"malformed batch", http.MethodPost, sealBatch(t, publicKey, "not json"), http.StatusBadRequest},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			handler := newIngestHandler(keys, internal.NewDeduper(time.Minute), internal.NewSlackNotifier("", ""))
+			handler := newIngestHandler(keys, internal.NewDeduper(time.Minute), internal.NewSlackNotifier("", ""), noReverseDNS)
 			request := httptest.NewRequestWithContext(context.Background(), test.method, "/logs", bytes.NewReader(test.body))
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)
@@ -126,4 +126,48 @@ func sealBatch(t *testing.T, publicKey ed25519.PublicKey, batch string) []byte {
 		t.Fatal(err)
 	}
 	return body
+}
+
+func noReverseDNS(context.Context, string) ([]string, error) { return nil, nil }
+
+func TestIngestNamesTheReportingSource(t *testing.T) {
+	publicKey, keys := ingestKeys(t)
+	var fields []struct{ Title, Value string }
+	slack := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var notification struct {
+			Attachments []struct {
+				Fields []struct{ Title, Value string }
+			}
+		}
+		if err := json.NewDecoder(r.Body).Decode(&notification); err != nil || len(notification.Attachments) != 1 {
+			t.Errorf("slack payload: %v", err)
+			return
+		}
+		fields = notification.Attachments[0].Fields
+	}))
+	defer slack.Close()
+
+	var looked []string
+	lookup := func(_ context.Context, ip string) ([]string, error) {
+		looked = append(looked, ip)
+		return []string{"94-224-86-24.access.telenet.be."}, nil
+	}
+	handler := newIngestHandler(keys, internal.NewDeduper(time.Minute), internal.NewSlackNotifier(slack.URL, ""), lookup)
+	body := sealBatch(t, publicKey, `[{"v":"1","triggered_at":"2026-11-26T10:00:01Z","trigger":{"time":"2026-11-26T10:00:00Z","level":"error","msg":"list threat summaries"},"runtime":{"storage_driver":"sqlite"}}]`)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/logs", bytes.NewReader(body))
+	request.Header.Set("X-Forwarded-For", "198.51.100.9, 94.224.86.24, 34.36.1.2")
+	handler.ServeHTTP(httptest.NewRecorder(), request)
+
+	if len(looked) != 1 || looked[0] != "94.224.86.24" {
+		t.Fatalf("reverse lookups = %q, want the load balancer's client address once", looked)
+	}
+	for _, field := range fields {
+		if field.Title == "Source" {
+			if field.Value != "94.224.86.24 (94-224-86-24.access.telenet.be)" {
+				t.Fatalf("Source = %q", field.Value)
+			}
+			return
+		}
+	}
+	t.Fatalf("no Source field in %+v", fields)
 }

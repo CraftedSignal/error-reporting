@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -43,7 +44,7 @@ func (d *Deduper) Seen(r ReportPayload) bool {
 	now := time.Now()
 	d.expire(now)
 	if e, ok := d.seen[key]; ok {
-		e.Value.(*dedupEntry).expires = now.Add(d.ttl)
+		entryOf(e).expires = now.Add(d.ttl)
 		d.order.MoveToFront(e)
 		return true
 	}
@@ -58,15 +59,21 @@ func (d *Deduper) remove(e *list.Element) {
 	if e == nil {
 		return
 	}
-	delete(d.seen, e.Value.(*dedupEntry).key)
+	delete(d.seen, entryOf(e).key)
 	d.order.Remove(e)
 }
 
 // Expiry order follows recency because every entry has the same TTL.
 func (d *Deduper) expire(now time.Time) {
-	for e := d.order.Back(); e != nil && !now.Before(e.Value.(*dedupEntry).expires); e = d.order.Back() {
+	for e := d.order.Back(); e != nil && !now.Before(entryOf(e).expires); e = d.order.Back() {
 		d.remove(e)
 	}
+}
+
+// entryOf returns the entry an element holds; the list only holds *dedupEntry.
+func entryOf(e *list.Element) *dedupEntry {
+	entry, _ := e.Value.(*dedupEntry)
+	return entry
 }
 
 func (d *Deduper) Len() int {
@@ -82,6 +89,10 @@ func fingerprint(r ReportPayload) [sha256.Size]byte {
 	writeField(h, "notification:v1")
 	writeField(h, r.Trigger.Message)
 	writeField(h, r.Trigger.Level)
+	// Company IDs repeat across installations (every one starts at 1), so an
+	// on-prem alert must not suppress the same message from SaaS or elsewhere.
+	writeField(h, strconv.FormatBool(r.Runtime.IsSaaS))
+	writeField(h, r.Runtime.LicenseID)
 	if company, ok := r.Trigger.GetAttr("company_id"); ok {
 		writeField(h, "present")
 		writeField(h, fmt.Sprintf("%T", company))

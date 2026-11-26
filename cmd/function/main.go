@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -24,7 +26,7 @@ func main() {
 
 	deduper := internal.NewDeduper(5 * time.Minute)
 	notifier := internal.NewSlackNotifier(os.Getenv("SLACK_WEBHOOK_URL"), os.Getenv("SLACK_CHANNEL"))
-	handler := newIngestHandler(ks, deduper, notifier)
+	handler := newIngestHandler(ks, deduper, notifier, net.DefaultResolver.LookupAddr)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/logs", handler)
@@ -56,7 +58,9 @@ func main() {
 	}
 }
 
-func newIngestHandler(ks *internal.KeyStore, deduper *internal.Deduper, notifier *internal.SlackNotifier) http.HandlerFunc {
+// newIngestHandler decrypts report batches and notifies Slack once per
+// distinct report. lookupAddr names the reporting address (reverse DNS).
+func newIngestHandler(ks *internal.KeyStore, deduper *internal.Deduper, notifier *internal.SlackNotifier, lookupAddr func(context.Context, string) ([]string, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -90,11 +94,16 @@ func newIngestHandler(ks *internal.KeyStore, deduper *internal.Deduper, notifier
 			return
 		}
 
+		var src *internal.Source // resolved once, and only when something is sent
 		for _, report := range reports {
 			if deduper.Seen(report) {
 				continue
 			}
-			if err := notifier.Notify(r.Context(), report); err != nil {
+			if src == nil {
+				resolved := internal.ResolveSource(r.Context(), internal.ClientIP(r), lookupAddr)
+				src = &resolved
+			}
+			if err := notifier.Notify(r.Context(), report, *src); err != nil {
 				slog.Warn("failed to notify slack", slog.String("error", err.Error()))
 				// Continue processing other reports.
 			}
