@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"filippo.io/edwards25519"
+
 	"golang.org/x/crypto/nacl/box"
 )
 
@@ -32,10 +34,12 @@ func TestKeyStore_DecryptRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode ed pub: %v", err)
 	}
-	curvePub, err := ed25519PublicKeyToCurve25519(edPub)
+	point, err := new(edwards25519.Point).SetBytes(edPub)
 	if err != nil {
 		t.Fatalf("convert pub: %v", err)
 	}
+	var curvePub [32]byte
+	copy(curvePub[:], point.BytesMontgomery())
 
 	plaintext, _ := json.Marshal(map[string]string{"msg": "hello"})
 	ciphertext, err := box.SealAnonymous(nil, plaintext, &curvePub, rand.Reader)
