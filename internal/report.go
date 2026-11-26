@@ -52,6 +52,11 @@ type RuntimeInfo struct {
 	IsSaaS        bool   `json:"is_saas"`
 	DevMode       bool   `json:"dev_mode"`
 	Airgapped     bool   `json:"airgapped"`
+	// Installation identity; older reporters omit these.
+	LicenseID string `json:"license_id,omitempty"`
+	Licensee  string `json:"licensee,omitempty"`
+	Hosting   string `json:"hosting,omitempty"`
+	Hostname  string `json:"hostname,omitempty"`
 }
 type ReportPayload struct {
 	FormatVersion string            `json:"v"`

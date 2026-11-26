@@ -16,6 +16,12 @@ import (
 // fields keyed by title.
 func slackFieldsFor(t *testing.T, batch string) map[string]string {
 	t.Helper()
+	return slackFieldsFrom(t, batch, Source{})
+}
+
+// slackFieldsFrom is slackFieldsFor for a batch received from src.
+func slackFieldsFrom(t *testing.T, batch string, src Source) map[string]string {
+	t.Helper()
 	reports, err := DecodeReportBatch([]byte(batch))
 	if err != nil || len(reports) != 1 {
 		t.Fatalf("DecodeReportBatch: %d reports, err = %v", len(reports), err)
@@ -37,7 +43,7 @@ func slackFieldsFor(t *testing.T, batch string) map[string]string {
 	}))
 	defer srv.Close()
 
-	if err := NewSlackNotifier(srv.URL, "").Notify(context.Background(), reports[0]); err != nil {
+	if err := NewSlackNotifier(srv.URL, "").Notify(context.Background(), reports[0], src); err != nil {
 		t.Fatalf("Notify: %v", err)
 	}
 	if len(posted.Attachments) != 1 {
@@ -159,5 +165,53 @@ func TestSlackDetailsAreBounded(t *testing.T) {
 	}
 	if first := strings.SplitN(details, "\n", 2)[0]; len(first) > slackDetailLineLimit {
 		t.Errorf("len(first line) = %d, want at most %d", len(first), slackDetailLineLimit)
+	}
+}
+
+func TestNotifyIdentifiesTheInstallation(t *testing.T) {
+	fields := slackFieldsFrom(t, `[{"v":"1","triggered_at":"2026-11-26T10:57:01Z","trigger":{"time":"2026-11-26T10:57:00Z","level":"error","msg":"threat scenario projection failed"},
+		"build":{"version":"0.16.3-357-ge8bef99d","commit":"e8bef99d","goos":"linux","goarch":"arm64"},
+		"runtime":{"storage_driver":"sqlite","license_id":"lic-dev","licensee":"Development Arne","hosting":"container","hostname":"cs-onprem"}}]`,
+		Source{IP: "94.224.86.24", Host: "94-224-86-24.access.telenet.be"})
+
+	want := map[string]string{
+		"Environment": "on-prem · Development Arne",
+		"Version":     "0.16.3-357-ge8bef99d",
+		"Runtime":     "linux/arm64 · sqlite · container",
+		"Host":        "cs-onprem",
+		"Source":      "94.224.86.24 (94-224-86-24.access.telenet.be)",
+	}
+	for title, value := range want {
+		if fields[title] != value {
+			t.Errorf("%s = %q, want %q", title, fields[title], value)
+		}
+	}
+}
+
+func TestNotifyIdentityOfOlderReporters(t *testing.T) {
+	// Reporters before the identity fields send only the license type.
+	fields := slackFieldsFor(t, reportWithAttrs(`{"key":"error","value":"boom"}`))
+
+	want := map[string]string{"Environment": "SaaS", "Version": "dev (ce1f9464)", "Runtime": "unknown"}
+	for title, value := range want {
+		if fields[title] != value {
+			t.Errorf("%s = %q, want %q", title, fields[title], value)
+		}
+	}
+	for _, title := range []string{"Host", "Source"} {
+		if _, ok := fields[title]; ok {
+			t.Errorf("%s shown without a value: %q", title, fields[title])
+		}
+	}
+}
+
+func TestNotifyIdentityNeutralizesUntrustedValues(t *testing.T) {
+	fields := slackFieldsFor(t, `[{"v":"1","triggered_at":"2026-11-26T10:57:01Z","trigger":{"time":"2026-11-26T10:57:00Z","level":"error","msg":"boom"},
+		"runtime":{"licensee":"<!channel> `+"`x`"+`","hostname":"<https://evil.example|click>"}}]`)
+
+	for _, title := range []string{"Environment", "Host"} {
+		if strings.ContainsAny(fields[title], "<>`") {
+			t.Errorf("%s = %q contains mrkdwn control characters", title, fields[title])
+		}
 	}
 }

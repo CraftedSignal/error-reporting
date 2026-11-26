@@ -34,8 +34,9 @@ func (n *SlackNotifier) isBotToken() bool {
 	return strings.HasPrefix(n.webhookURL, "xoxb-")
 }
 
-// Notify sends a Slack message for the report.
-func (n *SlackNotifier) Notify(ctx context.Context, r ReportPayload) error {
+// Notify sends a Slack message for the report. src is where the batch came
+// from, as seen by the ingestor.
+func (n *SlackNotifier) Notify(ctx context.Context, r ReportPayload, src Source) error {
 	if n.webhookURL == "" {
 		return fmt.Errorf("slack webhook not configured")
 	}
@@ -65,8 +66,8 @@ func (n *SlackNotifier) Notify(ctx context.Context, r ReportPayload) error {
 	attachment := map[string]interface{}{
 		"color":     color,
 		"title":     fmt.Sprintf("[%s] %s", strings.ToUpper(r.Trigger.Level), r.Trigger.Message),
-		"fallback":  fmt.Sprintf("%s: %s", r.Trigger.Level, r.Trigger.Message),
-		"fields":    slackFields(r, companyID, correlationID, userID),
+		"fallback":  fmt.Sprintf("%s (%s): %s", r.Trigger.Level, environmentLabel(r.Runtime), r.Trigger.Message),
+		"fields":    slackFields(r, src, companyID, correlationID, userID),
 		"footer":    fmt.Sprintf("CraftedSignal %s (%s)", r.Build.Version, r.Build.Commit),
 		"ts":        time.Now().Unix(),
 		"mrkdwn_in": []string{"text", "fields"},
@@ -133,10 +134,18 @@ func truncateSlack(value string, limit int) string {
 	return value[:limit-15] + "... [truncated]"
 }
 
-func slackFields(r ReportPayload, companyID, correlationID, userID string) []map[string]interface{} {
+func slackFields(r ReportPayload, src Source, companyID, correlationID, userID string) []map[string]interface{} {
 	fields := []map[string]interface{}{
+		{"title": "Environment", "value": slackValue(environmentLabel(r.Runtime)), "short": true},
 		{"title": "Company", "value": companyID, "short": true},
-		{"title": "Environment", "value": envLabel(r.Runtime), "short": true},
+		{"title": "Version", "value": slackValue(versionLabel(r.Build)), "short": true},
+		{"title": "Runtime", "value": slackValue(runtimeLabel(r)), "short": true},
+	}
+	if r.Runtime.Hostname != "" {
+		fields = append(fields, map[string]interface{}{"title": "Host", "value": slackValue(r.Runtime.Hostname), "short": true})
+	}
+	if label := sourceLabel(src); label != "" {
+		fields = append(fields, map[string]interface{}{"title": "Source", "value": slackValue(label), "short": true})
 	}
 	if correlationID != "" {
 		fields = append(fields, map[string]interface{}{"title": "Correlation ID", "value": correlationID, "short": true})
@@ -166,7 +175,13 @@ var slackEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "
 const (
 	slackDetailLineLimit = 700 // bound each diagnostic attribute
 	slackDetailsLimit    = 2000
+	slackFieldLimit      = 200 // bound each identity field
 )
+
+// slackValue bounds and neutralizes a reporter-supplied field value.
+func slackValue(value string) string {
+	return slackEscaper.Replace(truncateSlack(strings.Join(strings.Fields(value), " "), slackFieldLimit))
+}
 
 // slackDetails renders the trigger's attributes as key=value lines, skipping
 // those that already have a field of their own. Only scalar values are shown:
@@ -193,6 +208,60 @@ func slackDetails(attrs []Attr) string {
 		lines = append(lines, slackEscaper.Replace(truncateSlack(line, slackDetailLineLimit)))
 	}
 	return truncateSlack(strings.Join(lines, "\n"), slackDetailsLimit)
+}
+
+// environmentLabel says which kind of installation reported and whose it is:
+// the license type alone made a development box look like a customer site.
+func environmentLabel(rt RuntimeInfo) string {
+	parts := []string{envLabel(rt)}
+	if rt.Licensee != "" {
+		parts = append(parts, rt.Licensee)
+	}
+	if rt.DevMode {
+		parts = append(parts, "dev mode")
+	}
+	return strings.Join(parts, " · ")
+}
+
+// versionLabel names the build; git-describe versions already contain the
+// short commit, so it is only appended when missing.
+func versionLabel(b BuildInfo) string {
+	version := b.Version
+	if version == "" {
+		version = "unknown"
+	}
+	commit := b.Commit
+	if len(commit) > 8 {
+		commit = commit[:8]
+	}
+	if commit != "" && !strings.Contains(version, commit) {
+		version += " (" + commit + ")"
+	}
+	return version
+}
+
+// runtimeLabel is the OS/architecture, database and hosting of the reporter.
+func runtimeLabel(r ReportPayload) string {
+	var parts []string
+	if r.Build.GoOS != "" || r.Build.GoArch != "" {
+		parts = append(parts, r.Build.GoOS+"/"+r.Build.GoArch)
+	}
+	for _, v := range []string{r.Runtime.StorageDriver, r.Runtime.Hosting} {
+		if v != "" {
+			parts = append(parts, v)
+		}
+	}
+	if len(parts) == 0 {
+		return "unknown"
+	}
+	return strings.Join(parts, " · ")
+}
+
+func sourceLabel(src Source) string {
+	if src.Host == "" {
+		return src.IP
+	}
+	return src.IP + " (" + src.Host + ")"
 }
 
 func envLabel(rt RuntimeInfo) string {
